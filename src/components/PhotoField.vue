@@ -110,7 +110,7 @@ function onFile(event: Event) {
   justify-content: center;
   gap: 8px;
   font-size: 13px;
-  color: #ffffff;
+  color: var(--text);
 }
 
 .photo__actions {

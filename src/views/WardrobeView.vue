@@ -162,11 +162,11 @@ onMounted(() => {
   height: 54px;
   border-radius: 18px;
   background: var(--accent-strong);
-  color: #ffffff;
+  color: #10121a;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 10px 24px rgba(91, 111, 224, 0.32);
+  box-shadow: 0 10px 24px rgba(124, 143, 255, 0.34);
   z-index: 30;
 }
 

@@ -20,7 +20,7 @@ const { message } = useToast()
   max-width: calc(100vw - 48px);
   padding: 10px 16px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.98);
+  background: color-mix(in srgb, var(--bg-elev-2) 96%, transparent);
   border: 1px solid var(--border-strong);
   color: var(--text);
   font-size: 13px;

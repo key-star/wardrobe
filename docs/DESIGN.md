@@ -1,6 +1,6 @@
 # 衣橱 · Wardrobe — 设计与开发文档
 
-> 版本：v1.2（浅色主题；对应代码 M1 完成态；含附录 A–E，补齐文案、图标、依赖版本、隐式约定与视觉基准）
+> 版本：v1.3（提亮暗色主题；对应代码 M1 完成态；含附录 A–E，补齐文案、图标、依赖版本、隐式约定与视觉基准）
 > 目标：仅凭本文档即可从零复刻出功能、数据、交互一致的软件。
 > 文中所有「必须」为复刻一致性要求，「建议」为可替换实现。
 
@@ -533,8 +533,8 @@ VitePWA({
     name: '衣橱 · Wardrobe',
     short_name: '衣橱',
     lang: 'zh-CN',
-    theme_color: '#f5f6fa',
-    background_color: '#f5f6fa',
+    theme_color: '#191b22',
+    background_color: '#191b22',
     display: 'standalone',
     orientation: 'portrait',
     start_url: './',
@@ -556,9 +556,9 @@ VitePWA({
 
 ```html
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
-<meta name="theme-color" content="#f5f6fa" />
+<meta name="theme-color" content="#191b22" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="衣橱" />
 <meta name="mobile-web-app-capable" content="yes" />
 <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
@@ -605,19 +605,19 @@ npx wrangler pages deploy dist --project-name wardrobe
 
 | 变量 | 值 | 用途 |
 | --- | --- | --- |
-| `--bg` | `#f5f6fa` | 页面底色 |
-| `--bg-elev` | `#ffffff` | 卡片 / 输入区背景 |
-| `--bg-elev-2` | `#eceff5` | 次级按钮 |
-| `--bg-input` | `#f1f3f8` | 输入框 |
-| `--border` | `#e3e6ee` | 常规边框 |
-| `--border-strong` | `#cfd4e0` | 强调边框 |
-| `--text` | `#1b1e27` | 主文字 |
-| `--text-dim` | `#596174` | 次文字 |
-| `--text-faint` | `#8a91a3` | 辅助文字 |
-| `--accent` | `#5063d8` | 主色（文字/选中） |
-| `--accent-strong` | `#5b6fe0` | 主按钮底色 |
-| `--accent-soft` | `rgba(91,111,224,.12)` | 选中背景 |
-| `--danger` | `#d94a4a` | 删除 |
+| `--bg` | `#191b22` | 页面底色 |
+| `--bg-elev` | `#22252f` | 卡片 / 输入区背景 |
+| `--bg-elev-2` | `#2b2f3b` | 次级按钮 |
+| `--bg-input` | `#2f3340` | 输入框 |
+| `--border` | `#363b49` | 常规边框 |
+| `--border-strong` | `#4a5063` | 强调边框 |
+| `--text` | `#f4f6fb` | 主文字 |
+| `--text-dim` | `#b6bdcd` | 次文字 |
+| `--text-faint` | `#8d95a8` | 辅助文字 |
+| `--accent` | `#9aaaff` | 主色（文字/选中） |
+| `--accent-strong` | `#7c8fff` | 主按钮底色 |
+| `--accent-soft` | `rgba(154,170,255,.16)` | 选中背景 |
+| `--danger` | `#ff7b7b` | 删除 |
 | `--radius` | 14px | 卡片 |
 | `--radius-sm` | 10px | 输入框 |
 | `--radius-lg` | 20px | 大图 |
@@ -1095,7 +1095,7 @@ npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
 1. 把 `src/style.css` 写成 §10.1 的 token + §10.2 的通用类（`.topbar` `.card` `.btn` `.chip` `.input` `.section` `.thumbsize` `.empty`）。
 2. 全局 `box-sizing: border-box`、`overscroll-behavior-y: none`、`-webkit-tap-highlight-color: transparent`。
 
-验收：任意页面背景为 `#f5f6fa`，文字为 `#1b1e27`。
+验收：任意页面背景为 `#191b22`，文字为 `#f4f6fb`。
 
 ### 步骤 4：数据层
 
@@ -1136,7 +1136,7 @@ npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
 - `PhotoField` 必须有两个 file input（相机带 `capture="environment"`）。
 - `Icon` 用 `currentColor`，不引入图标库。
 
-验收：组件在浅色背景下无白边、无错位。
+验收：组件在暗色背景下无白边、无错位。
 
 ### 步骤 8：页面与路由
 
@@ -1526,7 +1526,7 @@ npm run build
 
 ### E1 截图基准（`docs/screenshots/`）
 
-所有截图来自 Chromium，视口 **390×844**，`deviceScaleFactor: 2`，`isMobile: true`，浅色主题。
+所有截图来自 Chromium，视口 **390×844**，`deviceScaleFactor: 2`，`isMobile: true`，暗色主题。
 
 | 文件 | 对应界面 | 观察重点 |
 | --- | --- | --- |
@@ -1581,7 +1581,7 @@ border-top: 1px solid var(--border);
 right: 18px;
 bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 18px);
 width: 54px; height: 54px; border-radius: 18px;
-background: var(--accent-strong); color: #ffffff;
+background: var(--accent-strong); color: #10121a;
 box-shadow: 0 10px 24px rgba(111, 131, 255, 0.38);
 ```
 
@@ -1664,10 +1664,10 @@ font-size: 13px; box-shadow: var(--shadow);
 ### E3 视觉检查清单
 
 - [ ] 所有卡片圆角 14px，大图圆角 20px，输入框圆角 10px
-- [ ] 主按钮底色 `#5b6fe0`，文字白色 `#ffffff`
+- [ ] 主按钮底色 `#7c8fff`，文字近黑 `#10121a`
 - [ ] 选中 chips：文字 `--accent`、底色 `--accent-soft`、边框 `--accent-strong`
 - [ ] 单品图一律 `object-fit: contain` + 棋盘格底，无拉伸
 - [ ] 底部固定元素均叠加 `safe-bottom`
 - [ ] 无横向滚动条
-- [ ] 浅色下无刺眼纯黑大块，卡片为白底 + 浅灰页面底
+- [ ] 暗色下无纯白底块，卡片比页面底色高一档
 
