@@ -17,6 +17,7 @@ import {
 } from '@/db/constants'
 import { getImage, getItem } from '@/db/repo'
 import type { CleanState, Item } from '@/db/types'
+import { createCutout } from '@/services/cutout'
 import { useWardrobeStore } from '@/stores/wardrobe'
 
 const route = useRoute()
@@ -26,11 +27,18 @@ const { show } = useToast()
 
 const item = ref<Item | null>(null)
 const original = ref<Blob | null>(null)
+const cutout = ref<Blob | null>(null)
+const viewMode = ref<'original' | 'cutout'>('original')
 const viewerOpen = ref(false)
+const retrying = ref(false)
 
 const id = computed(() => (typeof route.params.id === 'string' ? route.params.id : ''))
 
-const displayImage = computed(() => original.value ?? item.value?.thumb ?? null)
+const hasCutout = computed(() => Boolean(cutout.value))
+const displayImage = computed(() => {
+  if (viewMode.value === 'cutout' && cutout.value) return cutout.value
+  return original.value ?? item.value?.thumb ?? null
+})
 const imageUrl = useObjectUrl(displayImage)
 
 const title = computed(() => {
@@ -94,7 +102,26 @@ onMounted(async () => {
   }
   item.value = found
   original.value = (await getImage(found.id, 'original')) ?? found.thumb ?? null
+  cutout.value = (await getImage(found.id, 'cutout')) ?? null
+  if (cutout.value) viewMode.value = 'cutout'
 })
+
+async function regenerateCutout() {
+  const current = item.value
+  if (!current || !original.value) return
+  retrying.value = true
+  try {
+    const result = await createCutout(original.value)
+    await store.attachCutout(current.id, result.cutout, result.thumb)
+    cutout.value = result.cutout
+    viewMode.value = 'cutout'
+    show('抠图完成')
+  } catch {
+    show('抠图失败，请稍后重试')
+  } finally {
+    retrying.value = false
+  }
+}
 
 async function markWorn() {
   if (!item.value) return
@@ -134,9 +161,42 @@ async function remove() {
     </header>
 
     <template v-if="item">
-      <div class="hero thumbsize" @click="viewerOpen = true">
+      <div
+        class="hero thumbsize"
+        :class="{ 'hero--cutout': viewMode === 'cutout' && hasCutout }"
+        @click="viewerOpen = true"
+      >
         <img v-if="imageUrl" :src="imageUrl" :alt="title" />
         <span v-else class="hero__placeholder">{{ categoryDef(item.category).label }}</span>
+      </div>
+
+      <div v-if="original" class="media-bar">
+        <div class="media-bar__toggle">
+          <button
+            class="chip"
+            :class="{ 'chip--on': viewMode === 'original' }"
+            @click="viewMode = 'original'"
+          >
+            原图
+          </button>
+          <button
+            class="chip"
+            :class="{ 'chip--on': viewMode === 'cutout' }"
+            :disabled="!hasCutout"
+            @click="viewMode = 'cutout'"
+          >
+            抠图
+          </button>
+        </div>
+        <button
+          v-if="!hasCutout"
+          class="media-bar__retry"
+          :disabled="retrying"
+          @click="regenerateCutout"
+        >
+          <Icon name="sparkle" :size="15" :class="{ spin: retrying }" />
+          {{ retrying ? '抠图中' : '一键抠图' }}
+        </button>
       </div>
 
       <div class="section actions">
@@ -232,8 +292,39 @@ async function remove() {
   object-fit: contain;
 }
 
+.hero--cutout {
+  background:
+    repeating-conic-gradient(
+      color-mix(in srgb, var(--text) 6%, transparent) 0% 25%,
+      transparent 0% 50%
+    )
+    0 0 / 22px 22px;
+}
+
 .hero__placeholder {
   color: var(--text-faint);
+}
+
+.media-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: -4px 16px 4px;
+}
+
+.media-bar__toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.media-bar__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--accent);
 }
 
 .actions {

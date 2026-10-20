@@ -3,6 +3,7 @@ import { computed, ref, toRaw } from 'vue'
 import { CATEGORIES } from '@/db/constants'
 import type { CategoryId, CleanState, Item } from '@/db/types'
 import {
+  deleteImage,
   deleteItem as dbDeleteItem,
   listItems,
   newId,
@@ -50,6 +51,7 @@ export interface ItemDraft {
   item: Item
   original?: Blob | null
   cutout?: Blob | null
+  cutoutThumb?: Blob | null
 }
 
 // Vue reactive proxies cannot be structured-cloned into IndexedDB,
@@ -131,7 +133,7 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
   }
 
   async function saveItem(draft: ItemDraft): Promise<Item> {
-    const { item, original, cutout } = draft
+    const { item, original, cutout, cutoutThumb } = draft
     if (original) {
       await putImage(item.id, 'original', original)
       item.hasOriginal = true
@@ -139,6 +141,11 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
     if (cutout) {
       await putImage(item.id, 'cutout', cutout)
       item.hasCutout = true
+      if (cutoutThumb) item.thumb = cutoutThumb
+    } else if (original) {
+      // Replacing the photo invalidates any cutout made from the old one.
+      await deleteImage(item.id, 'cutout')
+      item.hasCutout = false
     }
     item.updatedAt = nowIso()
     if (!item.createdAt) item.createdAt = item.updatedAt
@@ -149,6 +156,16 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
     if (index >= 0) items.value[index] = plain
     else items.value.unshift(plain)
     return plain
+  }
+
+  async function attachCutout(id: string, cutout: Blob, thumb: Blob): Promise<void> {
+    const item = byId(id)
+    if (!item) return
+    await putImage(id, 'cutout', cutout)
+    item.hasCutout = true
+    item.thumb = thumb
+    item.updatedAt = nowIso()
+    await putItem(toPersistable(item))
   }
 
   async function removeItem(id: string): Promise<void> {
@@ -197,6 +214,7 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
     byId,
     load,
     saveItem,
+    attachCutout,
     removeItem,
     markWorn,
     setCleanState,

@@ -46,6 +46,10 @@ export async function getImage(
   return row?.blob
 }
 
+export async function deleteImage(itemId: string, kind: ImageKind): Promise<void> {
+  await db.images.delete(imageKey(itemId, kind))
+}
+
 export async function listImages(): Promise<StoredImage[]> {
   return db.images.toArray()
 }

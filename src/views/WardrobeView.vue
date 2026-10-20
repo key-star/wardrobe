@@ -48,6 +48,9 @@ onMounted(() => {
       <router-link to="/item/new" class="icon-btn" aria-label="添加单品">
         <Icon name="plus" :size="20" />
       </router-link>
+      <router-link to="/capture" class="icon-btn" aria-label="连续拍摄">
+        <Icon name="camera" :size="20" />
+      </router-link>
     </header>
 
     <div class="search">
@@ -87,9 +90,14 @@ onMounted(() => {
       <span class="empty__emoji">🧺</span>
       <p>衣橱还是空的</p>
       <p style="font-size: 13px">拍下第一件衣服，开始建立你的衣橱</p>
-      <router-link to="/item/new" class="btn btn--primary" style="margin-top: 6px">
-        <Icon name="camera" :size="19" />添加第一件
-      </router-link>
+      <div class="empty__buttons">
+        <router-link to="/item/new" class="btn btn--primary">
+          <Icon name="camera" :size="19" />添加第一件
+        </router-link>
+        <router-link to="/capture" class="btn">
+          <Icon name="grid" :size="19" />连续拍多件
+        </router-link>
+      </div>
     </div>
 
     <div v-else class="empty">
@@ -145,6 +153,14 @@ onMounted(() => {
   flex-direction: column;
   gap: 8px;
   padding: 12px 16px 10px;
+}
+
+.empty__buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .grid {

@@ -20,7 +20,10 @@ const cleanDef = computed(
 
 <template>
   <router-link :to="`/item/${item.id}`" class="item-card">
-    <div class="item-card__shot thumbsize">
+    <div
+      class="item-card__shot thumbsize"
+      :class="{ 'item-card__shot--cutout': item.hasCutout }"
+    >
       <img v-if="thumbUrl" :src="thumbUrl" :alt="title" loading="lazy" />
       <span v-else class="item-card__placeholder">{{ categoryLabel(item.category) }}</span>
       <span class="item-card__clean" :title="cleanDef.label">{{ cleanDef.emoji }}</span>
@@ -54,6 +57,15 @@ const cleanDef = computed(
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.item-card__shot--cutout {
+  background:
+    repeating-conic-gradient(
+      color-mix(in srgb, var(--text) 6%, transparent) 0% 25%,
+      transparent 0% 50%
+    )
+    0 0 / 18px 18px;
 }
 
 .item-card__shot img {

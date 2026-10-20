@@ -28,6 +28,11 @@ export const router = createRouter({
       meta: { tab: true },
     },
     {
+      path: '/capture',
+      name: 'capture',
+      component: () => import('@/views/CaptureView.vue'),
+    },
+    {
       path: '/item/new',
       name: 'item-new',
       component: () => import('@/views/ItemEditView.vue'),

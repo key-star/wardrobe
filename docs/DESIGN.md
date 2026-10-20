@@ -424,11 +424,14 @@ hex → nearestPaletteHex(hex)   // 欧氏距离最近的色板项
 - `processPhoto` 抛错 → 编辑页 Toast「照片处理失败，请重试」，`processing` 复位。
 - 解码使用 `finally` 关闭 `ImageBitmap`，避免内存泄漏。
 
-### 7.6 M2 抠图扩展点
+### 7.6 M2 抠图（已实现）
 
 - 新增 `kind: 'cutout'`，写入 `images` 表，`hasCutout = true`。
-- 建议在 1024px 图上执行，输出带 alpha 的 WebP。
-- 抠图后做**透明边裁切 + 4px 内边距**，保证搭配预览对齐。
+- 在 1024px 图上执行，输出带 alpha 的 WebP（浏览器不支持 WebP alpha 时退回 PNG）。
+- 抠图后做**透明边裁切 + 4px 内边距**，同时生成透明底缩略图并覆盖 `item.thumb`，
+  因此衣柜卡片与搭配预览默认显示透明底。
+- 失败不阻断：保留原图，`hasCutout = false`；详情页「一键抠图」与设置页「重新抠图全部」
+  均可重试（后台队列见 `src/stores/cutout.ts`）。
 
 ---
 
@@ -858,6 +861,8 @@ await db.open()
 ## 14. 待开发功能详细设计
 
 ### 14.1 M2 — 端上抠图 + 连续拍摄队列
+
+> 状态：已实现（代码 M2）。抠图优先 WebGPU、失败回退 CPU；模型走 CDN 并纳入 SW 运行时缓存。
 
 **目标**：让搭配预览好看；让批量录入 20 件成为可能。
 

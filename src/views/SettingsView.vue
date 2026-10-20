@@ -17,11 +17,18 @@ import {
   requestPersistentStorage,
   storageEstimate,
 } from '@/services/storage'
+import { useCutoutStore } from '@/stores/cutout'
 import { useWardrobeStore } from '@/stores/wardrobe'
 
 const store = useWardrobeStore()
-const { total, categoryStats, totalValue, wearCountTotal } = storeToRefs(store)
+const { total, categoryStats, totalValue, wearCountTotal, items } = storeToRefs(store)
+const cutout = useCutoutStore()
+const { running: cutoutRunning, total: cutoutTotal, done: cutoutDone, failed: cutoutFailed, percent: cutoutPercent } =
+  storeToRefs(cutout)
 const { show } = useToast()
+
+const photoCount = computed(() => items.value.filter((item) => item.hasOriginal).length)
+const cutoutCount = computed(() => items.value.filter((item) => item.hasCutout).length)
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const busy = ref(false)
@@ -81,6 +88,17 @@ async function doExport() {
   } finally {
     busy.value = false
   }
+}
+
+function regenerateCutouts() {
+  const ids = items.value.filter((item) => item.hasOriginal).map((item) => item.id)
+  if (!ids.length) {
+    show('还没有可处理的照片')
+    return
+  }
+  if (!window.confirm(`将重新抠图 ${ids.length} 件，期间可继续使用，继续？`)) return
+  cutout.enqueue(ids, true)
+  show('已加入抠图队列')
 }
 
 function pickFile() {
@@ -211,6 +229,31 @@ async function onFile(event: Event) {
     </div>
 
     <div class="section">
+      <div class="section__title">照片与抠图</div>
+      <div class="card block">
+        <p class="block__desc">
+          已抠图 {{ cutoutCount }} / {{ photoCount }} 件。抠图在本机完成，首次使用需下载模型（约 80MB），
+          之后可离线使用。抠图失败不影响单品正常使用。
+        </p>
+
+        <div v-if="cutoutRunning || cutoutTotal > 0" class="cutout-progress">
+          <div class="cutout-progress__head">
+            <span>{{ cutoutRunning ? `正在处理 ${cutoutDone}/${cutoutTotal}` : `上次完成 ${cutoutDone} 张` }}</span>
+            <span v-if="cutoutFailed" class="cutout-progress__fail">失败 {{ cutoutFailed }}</span>
+          </div>
+          <div class="usage__bar">
+            <div class="usage__fill" :style="{ width: `${cutoutPercent}%` }" />
+          </div>
+        </div>
+
+        <button class="btn btn--block" :disabled="cutoutRunning || !photoCount" @click="regenerateCutouts">
+          <Icon name="sparkle" :size="19" />
+          {{ cutoutRunning ? '抠图中…' : '重新抠图全部' }}
+        </button>
+      </div>
+    </div>
+
+    <div class="section">
       <div class="section__title">安装到手机主屏幕</div>
       <div class="card block">
         <p class="block__desc">
@@ -331,6 +374,23 @@ async function onFile(event: Event) {
   height: 100%;
   border-radius: 4px;
   background: var(--accent-strong);
+}
+
+.cutout-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cutout-progress__head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.cutout-progress__fail {
+  color: var(--warn, #e6b566);
 }
 
 .storage-state {

@@ -20,8 +20,11 @@ import {
 } from '@/db/constants'
 import { getImage, getItem, nowIso } from '@/db/repo'
 import type { CategoryId, CleanState, Item, ItemStatus, Pattern } from '@/db/types'
+import { createCutout } from '@/services/cutout'
 import { processPhoto } from '@/services/image'
 import { createEmptyItem, useWardrobeStore } from '@/stores/wardrobe'
+
+type CutoutState = 'idle' | 'processing' | 'done' | 'error'
 
 const route = useRoute()
 const router = useRouter()
@@ -37,9 +40,16 @@ const draft = reactive<Item>(createEmptyItem())
 const pickedOriginal = ref<Blob | null>(null)
 const pickedThumb = ref<Blob | null>(null)
 const storedOriginal = ref<Blob | null>(null)
+const pickedCutout = ref<Blob | null>(null)
+const pickedCutoutThumb = ref<Blob | null>(null)
+const storedCutout = ref<Blob | null>(null)
+const cutoutState = ref<CutoutState>('idle')
 const processing = ref(false)
 const saving = ref(false)
 const ready = ref(false)
+
+let cutoutPromise: Promise<void> | null = null
+let cutoutToken = 0
 
 const previewBlob = computed(() => pickedOriginal.value ?? storedOriginal.value)
 
@@ -102,8 +112,30 @@ onMounted(async () => {
   Object.assign(draft, item)
   const original = await getImage(id, 'original')
   storedOriginal.value = original ?? item.thumb ?? null
+  storedCutout.value = (await getImage(id, 'cutout')) ?? null
+  cutoutState.value = storedCutout.value ? 'done' : 'idle'
   ready.value = true
 })
+
+async function runCutout(source: Blob) {
+  const token = ++cutoutToken
+  cutoutState.value = 'processing'
+  cutoutPromise = (async () => {
+    try {
+      const result = await createCutout(source)
+      if (token !== cutoutToken) return
+      pickedCutout.value = result.cutout
+      pickedCutoutThumb.value = result.thumb
+      cutoutState.value = 'done'
+    } catch {
+      if (token !== cutoutToken) return
+      pickedCutout.value = null
+      pickedCutoutThumb.value = null
+      cutoutState.value = 'error'
+    }
+  })()
+  await cutoutPromise
+}
 
 async function onPick(file: File) {
   processing.value = true
@@ -112,6 +144,10 @@ async function onPick(file: File) {
     pickedOriginal.value = result.original
     pickedThumb.value = result.thumb
     if (result.colorHex && !draft.colorPrimary) draft.colorPrimary = result.colorHex
+    pickedCutout.value = null
+    pickedCutoutThumb.value = null
+    storedCutout.value = null
+    void runCutout(result.original)
   } catch {
     show('照片处理失败，请重试')
   } finally {
@@ -119,9 +155,20 @@ async function onPick(file: File) {
   }
 }
 
+function retryCutout() {
+  const source = pickedOriginal.value ?? storedOriginal.value
+  if (!source) return
+  void runCutout(source)
+}
+
 function clearPhoto() {
+  cutoutToken += 1
   pickedOriginal.value = null
   pickedThumb.value = null
+  pickedCutout.value = null
+  pickedCutoutThumb.value = null
+  storedCutout.value = null
+  cutoutState.value = 'idle'
   if (isEditing.value) storedOriginal.value = null
 }
 
@@ -132,14 +179,21 @@ async function save() {
   }
   saving.value = true
   try {
+    if (cutoutState.value === 'processing' && cutoutPromise) await cutoutPromise
     if (pickedThumb.value) draft.thumb = pickedThumb.value
+    if (pickedCutout.value && pickedCutoutThumb.value) draft.thumb = pickedCutoutThumb.value
     draft.updatedAt = nowIso()
     await store.saveItem({
       item: { ...draft },
       original: pickedOriginal.value,
-      cutout: null,
+      cutout: pickedCutout.value,
+      cutoutThumb: pickedCutoutThumb.value,
     })
-    show(isEditing.value ? '已保存' : '已加入衣橱')
+    if (pickedOriginal.value && cutoutState.value === 'error') {
+      show('已保存，抠图失败，可在详情页重试')
+    } else {
+      show(isEditing.value ? '已保存' : '已加入衣橱')
+    }
     router.replace(`/item/${draft.id}`)
   } catch {
     show('保存失败，请重试')
@@ -170,6 +224,16 @@ async function save() {
           @pick="onPick"
           @clear="clearPhoto"
         />
+        <p v-if="cutoutState === 'processing'" class="cutout-hint">
+          <span class="spin">◌</span> 正在生成透明底图，首次使用需下载模型（约 80MB）
+        </p>
+        <p v-else-if="cutoutState === 'error'" class="cutout-hint cutout-hint--warn">
+          <Icon name="alert" :size="15" /> 抠图失败，保存后将使用原图
+          <button class="cutout-hint__retry" @click="retryCutout">重试</button>
+        </p>
+        <p v-else-if="cutoutState === 'done'" class="cutout-hint">
+          <Icon name="check" :size="15" /> 已生成透明底图，可在详情页切换查看
+        </p>
       </div>
 
       <div class="section">
@@ -340,6 +404,26 @@ async function save() {
   min-height: 36px;
   padding: 0 16px;
   font-size: 14px;
+}
+
+.cutout-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 2px 0;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.cutout-hint--warn {
+  color: var(--warn, #e6b566);
+}
+
+.cutout-hint__retry {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 550;
 }
 
 .more {
