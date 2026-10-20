@@ -20,13 +20,13 @@ export const CATEGORIES: CategoryDef[] = [
     id: 'outer',
     label: '外套',
     emoji: '🧥',
-    subcategories: ['大衣', '风衣', '夹克', '羽绒服', '棉服', '西服', '马甲'],
+    subcategories: ['大衣', '风衣', '夹克', '羽绒服', '棉服', '西服', '马甲', '开衫', '皮衣', '冲锋衣'],
   },
   {
     id: 'top',
     label: '上装',
     emoji: '👕',
-    subcategories: ['T恤', '衬衫', 'Polo', '针织衫', '卫衣', '毛衣', '背心'],
+    subcategories: ['T恤', '衬衫', 'Polo', '小衫', '针织衫', '毛衫', '毛衣', '卫衣', '背心', '吊带'],
   },
   {
     id: 'inner',
@@ -38,25 +38,25 @@ export const CATEGORIES: CategoryDef[] = [
     id: 'bottom',
     label: '下装',
     emoji: '👖',
-    subcategories: ['牛仔裤', '休闲裤', '西裤', '短裤', '半身裙', '连衣裙', '运动裤'],
+    subcategories: ['牛仔裤', '休闲裤', '西裤', '运动裤', '短裤', '裤子', '半裙', '连衣裙'],
   },
   {
     id: 'shoes',
     label: '鞋',
     emoji: '👟',
-    subcategories: ['运动鞋', '板鞋', '皮鞋', '靴子', '凉鞋', '拖鞋', '帆布鞋'],
+    subcategories: ['运动鞋', '板鞋', '皮鞋', '靴子', '凉鞋', '拖鞋', '帆布鞋', '乐福鞋', '高跟鞋'],
   },
   {
     id: 'bag',
     label: '包',
     emoji: '👜',
-    subcategories: ['双肩包', '单肩包', '斜挎包', '手提包', '钱包', '行李箱'],
+    subcategories: ['双肩包', '单肩包', '斜挎包', '手提包', '托特包', '钱包', '行李箱'],
   },
   {
     id: 'accessory',
     label: '配饰',
     emoji: '🧣',
-    subcategories: ['帽子', '围巾', '腰带', '眼镜', '手套', '袜子', '首饰'],
+    subcategories: ['帽子', '围巾', '腰带', '眼镜', '手套', '袜子', '首饰', '领带', '丝巾'],
   },
 ]
 
