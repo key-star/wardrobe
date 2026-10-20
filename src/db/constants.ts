@@ -20,25 +20,25 @@ export const CATEGORIES: CategoryDef[] = [
     id: 'outer',
     label: '外套',
     emoji: '🧥',
-    subcategories: ['大衣', '风衣', '夹克', '羽绒服', '棉服', '西服', '马甲', '开衫', '皮衣', '冲锋衣'],
+    subcategories: ['大衣', '风衣', '夹克', '羽绒服', '棉服', '西服', '马甲', '针织开衫', '皮衣', '冲锋衣'],
   },
   {
     id: 'top',
     label: '上装',
     emoji: '👕',
-    subcategories: ['T恤', '衬衫', 'Polo', '小衫', '针织衫', '毛衫', '毛衣', '卫衣', '背心', '吊带'],
+    subcategories: ['T恤', '衬衫', 'Polo衫', '小衫', '针织衫', '毛衫', '毛衣', '卫衣', '背心', '吊带衫'],
   },
   {
     id: 'inner',
     label: '内搭',
     emoji: '🎽',
-    subcategories: ['打底衫', '吊带', '秋衣', '内衣', '保暖内衣'],
+    subcategories: ['打底衫', '吊带背心', '秋衣', '内衣', '保暖内衣'],
   },
   {
     id: 'bottom',
     label: '下装',
     emoji: '👖',
-    subcategories: ['牛仔裤', '休闲裤', '西裤', '运动裤', '短裤', '裤子', '半裙', '连衣裙'],
+    subcategories: ['牛仔裤', '休闲裤', '西裤', '运动裤', '短裤', '长裤', '半身裙', '连衣裙'],
   },
   {
     id: 'shoes',
@@ -48,7 +48,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     id: 'bag',
-    label: '包',
+    label: '箱包',
     emoji: '👜',
     subcategories: ['双肩包', '单肩包', '斜挎包', '手提包', '托特包', '钱包', '行李箱'],
   },
@@ -80,8 +80,7 @@ export function categoryLabel(id: CategoryId): string {
   return categoryDef(id).label
 }
 
-export const SEASONS: { id: Season; label: string; emoji: string }[] = [
-  { id: 'spring', label: '春', emoji: '🌱' },
+export const SEASONS: { id: Season; label: string; emoji: string }[] = [  { id: 'spring', label: '春', emoji: '🌱' },
   { id: 'summer', label: '夏', emoji: '☀️' },
   { id: 'autumn', label: '秋', emoji: '🍂' },
   { id: 'winter', label: '冬', emoji: '❄️' },
