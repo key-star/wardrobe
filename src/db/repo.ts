@@ -1,5 +1,12 @@
 import { db } from './db'
-import type { ImageKind, Item, SettingRow, StoredImage } from './types'
+import type {
+  ImageKind,
+  Item,
+  Outfit,
+  OutfitItem,
+  SettingRow,
+  StoredImage,
+} from './types'
 
 export function newId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -55,9 +62,47 @@ export async function listImages(): Promise<StoredImage[]> {
 }
 
 export async function deleteItem(id: string): Promise<void> {
-  await db.transaction('rw', db.items, db.images, async () => {
+  await db.transaction('rw', db.items, db.images, db.outfitItems, async () => {
     await db.images.where('itemId').equals(id).delete()
+    await db.outfitItems.where('itemId').equals(id).delete()
     await db.items.delete(id)
+  })
+}
+
+export async function listOutfits(): Promise<Outfit[]> {
+  const rows = await db.outfits.toArray()
+  return rows.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+}
+
+export async function getOutfit(id: string): Promise<Outfit | undefined> {
+  return db.outfits.get(id)
+}
+
+export async function putOutfit(outfit: Outfit): Promise<void> {
+  await db.outfits.put(outfit)
+}
+
+export async function listOutfitItems(outfitId?: string): Promise<OutfitItem[]> {
+  if (outfitId) {
+    return db.outfitItems.where('outfitId').equals(outfitId).toArray()
+  }
+  return db.outfitItems.toArray()
+}
+
+export async function replaceOutfitItems(
+  outfitId: string,
+  items: OutfitItem[],
+): Promise<void> {
+  await db.transaction('rw', db.outfitItems, async () => {
+    await db.outfitItems.where('outfitId').equals(outfitId).delete()
+    if (items.length) await db.outfitItems.bulkPut(items)
+  })
+}
+
+export async function deleteOutfit(id: string): Promise<void> {
+  await db.transaction('rw', db.outfits, db.outfitItems, async () => {
+    await db.outfitItems.where('outfitId').equals(id).delete()
+    await db.outfits.delete(id)
   })
 }
 

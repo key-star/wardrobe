@@ -3,6 +3,7 @@ const CUTOUT_MAX_EDGE = 1024
 const THUMB_MAX_EDGE = 420
 const PADDING = 4
 const ALPHA_THRESHOLD = 12
+const IDLE_TIMEOUT = 60_000
 
 export interface CutoutResult {
   cutout: Blob
@@ -11,6 +12,41 @@ export interface CutoutResult {
 
 export type CutoutProgress = (label: string, current: number, total: number) => void
 
+export interface CutoutProgressState {
+  text: string
+  percent: number | null
+}
+
+export class CutoutAbortError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CutoutAbortError'
+  }
+}
+
+const STAGE_LABELS: Record<string, string> = {
+  'compute:decode': '正在解析照片',
+  'compute:inference': '正在识别衣服主体',
+  'compute:mask': '正在生成透明蒙版',
+  'compute:encode': '正在编码透明图',
+}
+
+export function describeCutoutProgress(
+  label: string,
+  current: number,
+  total: number,
+): CutoutProgressState {
+  if (label.startsWith('fetch:')) {
+    const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : null
+    return {
+      text: percent == null ? '正在下载抠图模型' : `正在下载抠图模型 ${percent}%`,
+      percent,
+    }
+  }
+  return { text: STAGE_LABELS[label] ?? '正在生成透明底图', percent: null }
+}
+
+type RemoveBackground = typeof import('@imgly/background-removal')['removeBackground']
 type Decoded = ImageBitmap | HTMLImageElement | HTMLCanvasElement
 
 let webpAlpha: boolean | null = null
@@ -177,16 +213,59 @@ async function trimAndPad(blob: Blob): Promise<HTMLCanvasElement> {
   }
 }
 
+async function runRemoval(
+  removeBackground: RemoveBackground,
+  input: Blob,
+  config: Parameters<RemoveBackground>[1],
+  onProgress?: CutoutProgress,
+  externalSignal?: AbortSignal,
+): Promise<Blob> {
+  if (externalSignal?.aborted) throw new CutoutAbortError('已取消抠图')
+
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  externalSignal?.addEventListener('abort', abort, { once: true })
+
+  let timedOut = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const arm = () => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, IDLE_TIMEOUT)
+  }
+  arm()
+
+  try {
+    return await removeBackground(input, {
+      ...config,
+      fetchArgs: { signal: controller.signal },
+      progress: (label, current, total) => {
+        arm()
+        onProgress?.(label, current, total)
+      },
+    })
+  } catch (error) {
+    if (timedOut) throw new CutoutAbortError('抠图超时，请检查网络后重试')
+    if (externalSignal?.aborted) throw new CutoutAbortError('已取消抠图')
+    throw error
+  } finally {
+    if (timer) clearTimeout(timer)
+    externalSignal?.removeEventListener('abort', abort)
+  }
+}
+
 export async function createCutout(
   source: Blob,
   onProgress?: CutoutProgress,
+  signal?: AbortSignal,
 ): Promise<CutoutResult> {
   const { removeBackground } = await import('@imgly/background-removal')
   const input = await prepareInput(source)
   const base = {
     model: 'isnet_fp16' as const,
     output: { format: 'image/png' as const, quality: 1 },
-    progress: onProgress,
   }
 
   let removed: Blob | undefined
@@ -194,13 +273,26 @@ export async function createCutout(
     typeof navigator !== 'undefined' && 'gpu' in navigator && Boolean(navigator.gpu)
   if (gpuAvailable) {
     try {
-      removed = await removeBackground(input, { ...base, device: 'gpu' })
-    } catch {
+      removed = await runRemoval(
+        removeBackground,
+        input,
+        { ...base, device: 'gpu' },
+        onProgress,
+        signal,
+      )
+    } catch (error) {
+      if (error instanceof CutoutAbortError) throw error
       removed = undefined
     }
   }
   if (!removed) {
-    removed = await removeBackground(input, { ...base, device: 'cpu' })
+    removed = await runRemoval(
+      removeBackground,
+      input,
+      { ...base, device: 'cpu' },
+      onProgress,
+      signal,
+    )
   }
   if (!removed || removed.size === 0) throw new Error('抠图结果为空')
 

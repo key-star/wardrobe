@@ -6,13 +6,13 @@ const route = useRoute()
 
 const tabs = [
   { to: '/', label: '衣柜', icon: 'grid', match: 'wardrobe' },
-  { to: '/outfits', label: '搭配', icon: 'shirt', match: 'outfits' },
+  { to: '/outfits', label: '搭配', icon: 'shirt', match: 'outfit' },
   { to: '/today', label: '今天', icon: 'sun', match: 'today' },
   { to: '/settings', label: '设置', icon: 'gear', match: 'settings' },
 ]
 
 function isActive(match: string): boolean {
-  return route.name === match
+  return String(route.name ?? '').startsWith(match)
 }
 </script>
 

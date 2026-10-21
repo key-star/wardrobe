@@ -6,14 +6,16 @@ import { useCutoutStore } from '@/stores/cutout'
 import Icon from './Icon.vue'
 
 const cutout = useCutoutStore()
-const { running, total, done, failed, succeeded, percent } = storeToRefs(cutout)
+const { running, total, done, failed, succeeded, percent, progress } = storeToRefs(cutout)
 const { show } = useToast()
 
 const label = computed(() => {
-  if (running.value) return `正在抠图 ${done.value}/${total.value}`
+  if (running.value) return progress.value?.text ?? `正在抠图 ${done.value}/${total.value}`
   if (total.value > 0 && !failed.value) return `抠图完成 ${total.value} 张`
   return ''
 })
+
+const barPercent = computed(() => progress.value?.percent ?? percent.value)
 
 watch(running, (value, previous) => {
   if (previous && !value && total.value > 0) {
@@ -33,7 +35,7 @@ watch(running, (value, previous) => {
       <div class="cutout-indicator__body">
         <span class="cutout-indicator__text">{{ label }}</span>
         <div class="cutout-indicator__bar">
-          <div class="cutout-indicator__fill" :style="{ width: `${percent}%` }" />
+          <div class="cutout-indicator__fill" :style="{ width: `${barPercent}%` }" />
         </div>
       </div>
     </div>

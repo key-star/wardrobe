@@ -119,7 +119,9 @@ async function onFile(event: Event) {
     const result = await importBackup(file, importMode.value)
     await store.load(true)
     await refresh()
-    show(`导入完成：${result.items} 件单品`)
+    show(
+      `导入完成：${result.items} 件单品${result.outfits ? `、${result.outfits} 套搭配` : ''}`,
+    )
   } catch (error) {
     show(error instanceof Error ? error.message : '导入失败')
   } finally {

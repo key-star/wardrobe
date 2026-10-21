@@ -12,8 +12,23 @@ export const router = createRouter({
     {
       path: '/outfits',
       name: 'outfits',
-      component: () => import('@/views/ComingSoonView.vue'),
+      component: () => import('@/views/OutfitsView.vue'),
       meta: { tab: true },
+    },
+    {
+      path: '/outfits/new',
+      name: 'outfit-new',
+      component: () => import('@/views/OutfitEditView.vue'),
+    },
+    {
+      path: '/outfits/:id',
+      name: 'outfit-detail',
+      component: () => import('@/views/OutfitDetailView.vue'),
+    },
+    {
+      path: '/outfits/:id/edit',
+      name: 'outfit-edit',
+      component: () => import('@/views/OutfitEditView.vue'),
     },
     {
       path: '/today',

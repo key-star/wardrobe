@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { getImage, getItem } from '@/db/repo'
-import { createCutout } from '@/services/cutout'
+import { createCutout, describeCutoutProgress, type CutoutProgressState } from '@/services/cutout'
 import { useWardrobeStore } from './wardrobe'
 
 export const useCutoutStore = defineStore('cutout', () => {
@@ -12,6 +12,7 @@ export const useCutoutStore = defineStore('cutout', () => {
   const done = ref(0)
   const succeeded = ref(0)
   const failed = ref(0)
+  const progress = ref<CutoutProgressState | null>(null)
 
   const remaining = computed(() => pending.value.length + (activeId.value ? 1 : 0))
   const percent = computed(() => (total.value ? Math.round((done.value / total.value) * 100) : 0))
@@ -50,13 +51,16 @@ export const useCutoutStore = defineStore('cutout', () => {
           if (!item) throw new Error('单品不存在')
           const source = (await getImage(id, 'original')) ?? item.thumb
           if (!source) throw new Error('没有可抠图的照片')
-          const result = await createCutout(source)
+          const result = await createCutout(source, (label, current, total) => {
+            progress.value = describeCutoutProgress(label, current, total)
+          })
           await wardrobe.attachCutout(id, result.cutout, result.thumb)
           succeeded.value += 1
         } catch (error) {
           failed.value += 1
           console.warn('抠图失败', id, error)
         } finally {
+          progress.value = null
           done.value += 1
           activeId.value = null
         }
@@ -75,6 +79,7 @@ export const useCutoutStore = defineStore('cutout', () => {
     done,
     succeeded,
     failed,
+    progress,
     remaining,
     percent,
     enqueue,

@@ -17,7 +17,7 @@ import {
 } from '@/db/constants'
 import { getImage, getItem } from '@/db/repo'
 import type { CleanState, Item } from '@/db/types'
-import { createCutout } from '@/services/cutout'
+import { createCutout, CutoutAbortError, describeCutoutProgress, type CutoutProgressState } from '@/services/cutout'
 import { useWardrobeStore } from '@/stores/wardrobe'
 
 const route = useRoute()
@@ -31,6 +31,7 @@ const cutout = ref<Blob | null>(null)
 const viewMode = ref<'original' | 'cutout'>('original')
 const viewerOpen = ref(false)
 const retrying = ref(false)
+const cutoutProgress = ref<CutoutProgressState | null>(null)
 
 const id = computed(() => (typeof route.params.id === 'string' ? route.params.id : ''))
 
@@ -110,16 +111,20 @@ async function regenerateCutout() {
   const current = item.value
   if (!current || !original.value) return
   retrying.value = true
+  cutoutProgress.value = null
   try {
-    const result = await createCutout(original.value)
+    const result = await createCutout(original.value, (label, current, total) => {
+      cutoutProgress.value = describeCutoutProgress(label, current, total)
+    })
     await store.attachCutout(current.id, result.cutout, result.thumb)
     cutout.value = result.cutout
     viewMode.value = 'cutout'
     show('抠图完成')
-  } catch {
-    show('抠图失败，请稍后重试')
+  } catch (error) {
+    show(error instanceof CutoutAbortError ? error.message : '抠图失败，请稍后重试')
   } finally {
     retrying.value = false
+    cutoutProgress.value = null
   }
 }
 
@@ -195,7 +200,13 @@ async function remove() {
           @click="regenerateCutout"
         >
           <Icon name="sparkle" :size="15" :class="{ spin: retrying }" />
-          {{ retrying ? '抠图中' : '一键抠图' }}
+          {{
+            retrying
+              ? cutoutProgress?.percent != null
+                ? `抠图中 ${cutoutProgress.percent}%`
+                : '抠图中'
+              : '一键抠图'
+          }}
         </button>
       </div>
 

@@ -20,7 +20,7 @@ import {
 } from '@/db/constants'
 import { getImage, getItem, nowIso } from '@/db/repo'
 import type { CategoryId, CleanState, Item, ItemStatus, Pattern } from '@/db/types'
-import { createCutout } from '@/services/cutout'
+import { createCutout, CutoutAbortError, describeCutoutProgress, type CutoutProgressState } from '@/services/cutout'
 import { processPhoto } from '@/services/image'
 import { createEmptyItem, useWardrobeStore } from '@/stores/wardrobe'
 
@@ -44,12 +44,14 @@ const pickedCutout = ref<Blob | null>(null)
 const pickedCutoutThumb = ref<Blob | null>(null)
 const storedCutout = ref<Blob | null>(null)
 const cutoutState = ref<CutoutState>('idle')
+const cutoutProgress = ref<CutoutProgressState | null>(null)
 const processing = ref(false)
 const saving = ref(false)
 const ready = ref(false)
 
 let cutoutPromise: Promise<void> | null = null
 let cutoutToken = 0
+let cutoutAbort: AbortController | null = null
 
 const previewBlob = computed(() => pickedOriginal.value ?? storedOriginal.value)
 
@@ -119,22 +121,51 @@ onMounted(async () => {
 
 async function runCutout(source: Blob) {
   const token = ++cutoutToken
+  cutoutAbort?.abort()
+  const controller = new AbortController()
+  cutoutAbort = controller
+  cutoutProgress.value = null
   cutoutState.value = 'processing'
   cutoutPromise = (async () => {
     try {
-      const result = await createCutout(source)
+      const result = await createCutout(
+        source,
+        (label, current, total) => {
+          if (token === cutoutToken) {
+            cutoutProgress.value = describeCutoutProgress(label, current, total)
+          }
+        },
+        controller.signal,
+      )
       if (token !== cutoutToken) return
       pickedCutout.value = result.cutout
       pickedCutoutThumb.value = result.thumb
       cutoutState.value = 'done'
-    } catch {
+    } catch (error) {
       if (token !== cutoutToken) return
       pickedCutout.value = null
       pickedCutoutThumb.value = null
       cutoutState.value = 'error'
+      if (error instanceof CutoutAbortError && error.message.includes('取消')) {
+        cutoutState.value = 'idle'
+      }
+    } finally {
+      if (cutoutAbort === controller) cutoutAbort = null
+      if (token === cutoutToken) cutoutProgress.value = null
     }
   })()
   await cutoutPromise
+}
+
+function cancelCutout() {
+  cutoutToken += 1
+  cutoutAbort?.abort()
+  cutoutAbort = null
+  cutoutPromise = null
+  cutoutProgress.value = null
+  cutoutState.value = 'idle'
+  pickedCutout.value = null
+  pickedCutoutThumb.value = null
 }
 
 async function onPick(file: File) {
@@ -162,24 +193,35 @@ function retryCutout() {
 }
 
 function clearPhoto() {
-  cutoutToken += 1
+  cancelCutout()
   pickedOriginal.value = null
   pickedThumb.value = null
-  pickedCutout.value = null
-  pickedCutoutThumb.value = null
   storedCutout.value = null
-  cutoutState.value = 'idle'
   if (isEditing.value) storedOriginal.value = null
 }
 
-async function save() {
+async function save(skipCutout = false) {
+  if (saving.value) return
   if (!previewBlob.value) {
     show('请先拍照或选择一张照片')
     return
   }
   saving.value = true
+  let cutoutPending = false
   try {
-    if (cutoutState.value === 'processing' && cutoutPromise) await cutoutPromise
+    if (skipCutout) {
+      cutoutPending = true
+      cancelCutout()
+    } else if (cutoutState.value === 'processing' && cutoutPromise) {
+      await Promise.race([
+        cutoutPromise,
+        new Promise<void>((resolve) => setTimeout(resolve, 2500)),
+      ])
+      if (cutoutState.value === 'processing') {
+        cutoutPending = true
+        cancelCutout()
+      }
+    }
     if (pickedThumb.value) draft.thumb = pickedThumb.value
     if (pickedCutout.value && pickedCutoutThumb.value) draft.thumb = pickedCutoutThumb.value
     draft.updatedAt = nowIso()
@@ -189,7 +231,9 @@ async function save() {
       cutout: pickedCutout.value,
       cutoutThumb: pickedCutoutThumb.value,
     })
-    if (pickedOriginal.value && cutoutState.value === 'error') {
+    if (pickedOriginal.value && cutoutPending) {
+      show('已保存，透明底图可在详情页生成')
+    } else if (pickedOriginal.value && cutoutState.value === 'error') {
       show('已保存，抠图失败，可在详情页重试')
     } else {
       show(isEditing.value ? '已保存' : '已加入衣橱')
@@ -210,7 +254,7 @@ async function save() {
         <Icon name="back" :size="20" />
       </button>
       <div class="topbar__title">{{ isEditing ? '编辑单品' : '添加单品' }}</div>
-      <button class="btn btn--primary topbar__save" :disabled="saving" @click="save">
+      <button class="btn btn--primary topbar__save" :disabled="saving" @click="save()">
         {{ saving ? '保存中' : '保存' }}
       </button>
     </header>
@@ -225,8 +269,18 @@ async function save() {
           @clear="clearPhoto"
         />
         <p v-if="cutoutState === 'processing'" class="cutout-hint">
-          <span class="spin">◌</span> 正在生成透明底图，首次使用需下载模型（约 80MB）
+          <span class="spin">◌</span>
+          <span class="cutout-hint__text">
+            {{ cutoutProgress?.text ?? '正在生成透明底图，首次使用需下载模型（约 80MB）' }}
+          </span>
+          <button class="cutout-hint__retry" @click="save(true)">先保存原图</button>
         </p>
+        <div
+          v-if="cutoutState === 'processing' && cutoutProgress?.percent != null"
+          class="cutout-progress"
+        >
+          <div class="cutout-progress__fill" :style="{ width: `${cutoutProgress.percent}%` }" />
+        </div>
         <p v-else-if="cutoutState === 'error'" class="cutout-hint cutout-hint--warn">
           <Icon name="alert" :size="15" /> 抠图失败，保存后将使用原图
           <button class="cutout-hint__retry" @click="retryCutout">重试</button>
@@ -392,7 +446,7 @@ async function save() {
     </template>
 
     <div class="savebar">
-      <button class="btn btn--primary btn--block" :disabled="saving || processing" @click="save">
+      <button class="btn btn--primary btn--block" :disabled="saving || processing" @click="save()">
         <Icon name="check" :size="19" />{{ isEditing ? '保存修改' : '加入衣橱' }}
       </button>
     </div>
@@ -417,6 +471,26 @@ async function save() {
 
 .cutout-hint--warn {
   color: var(--warn, #e6b566);
+}
+
+.cutout-hint__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.cutout-progress {
+  height: 3px;
+  margin: 8px 2px 0;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--bg-input);
+}
+
+.cutout-progress__fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent-strong);
+  transition: width 0.25s ease;
 }
 
 .cutout-hint__retry {

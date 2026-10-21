@@ -1,6 +1,6 @@
 # 衣橱 · Wardrobe — 设计与开发文档
 
-> 版本：v1.3（提亮暗色主题；对应代码 M1 完成态；含附录 A–E，补齐文案、图标、依赖版本、隐式约定与视觉基准）
+> 版本：v1.6（M3 槽位搭配、叠穿预览、分享长图已实现；含 M2 端上抠图与连续拍摄队列；M4/M5 设计保留；含附录 A–E）
 > 目标：仅凭本文档即可从零复刻出功能、数据、交互一致的软件。
 > 文中所有「必须」为复刻一致性要求，「建议」为可替换实现。
 
@@ -115,12 +115,14 @@
 │   ├─ Views ── Pinia Store ── db/repo ── Dexie ── IndexedDB                    │
 │   │                                   ├─ items（标量 + thumb）                │
 │   │                                   ├─ images（original / cutout）          │
-│   │                                   ├─ outfits / outfitItems（预留）        │
-│   │                                   ├─ wearLogs（预留）                     │
+│   │                                   ├─ outfits / outfitItems（M3）            │
+│   │                                   ├─ wearLogs（M4 预留）                     │
 │   │                                   └─ settings（lastBackupAt 等）          │
 │   ├─ services/image   拍照 → 压缩 → 缩略图 → 主色识别                          │
+│   ├─ services/cutout  M2 端上抠图（WebGPU 优先 / CPU 回退、裁边补边）           │
+│   ├─ services/collage M3 叠穿布局 / 封面合成 / 分享长图                         │
 │   ├─ services/storage 持久化申请 / 用量估算                                    │
-│   └─ services/backup  zip 导出 / 导入                                         │
+│   └─ services/backup  zip 导出 / 导入（含搭配）                                │
 │                                                                              │
 └───────────────────────────────┬──────────────────────────────────────────────┘
                                 │ 仅首次加载静态资源（HTTPS）
@@ -158,7 +160,7 @@
 | Tab | 路由 | 状态 |
 | --- | --- | --- |
 | 衣柜 | `/` | 已实现 |
-| 搭配 | `/outfits` | 占位页（M3） |
+| 搭配 | `/outfits` | 已实现（M3） |
 | 今天 | `/today` | 占位页（M4） |
 | 设置 | `/settings` | 已实现 |
 
@@ -167,13 +169,17 @@ Tab 栏仅在这 4 个路由显示（`route.meta.tab === true`），详情/编�
 ### 4.2 路由表
 
 ```ts
-'/':              WardrobeView      meta.tab = true
-'/outfits':       ComingSoonView    meta.tab = true
-'/today':         ComingSoonView    meta.tab = true
-'/settings':      SettingsView      meta.tab = true
-'/item/new':      ItemEditView
-'/item/:id':      ItemDetailView
-'/item/:id/edit': ItemEditView
+'/':               WardrobeView      meta.tab = true
+'/outfits':        OutfitsView       meta.tab = true
+'/outfits/new':    OutfitEditView
+'/outfits/:id':    OutfitDetailView
+'/outfits/:id/edit': OutfitEditView
+'/today':          ComingSoonView    meta.tab = true
+'/settings':       SettingsView      meta.tab = true
+'/capture':        CaptureView       连续拍摄队列（M2）
+'/item/new':       ItemEditView
+'/item/:id':       ItemDetailView
+'/item/:id/edit':  ItemEditView
 '/:pathMatch(.*)*' → '/'
 ```
 
@@ -186,7 +192,11 @@ Tab 栏仅在这 4 个路由显示（`route.meta.tab === true`），详情/编�
  ▲                                  │
  └──────────── 返回 ────────────────┘
 衣柜 ──点卡片──> 单品详情
+衣柜 ──相机──> 连续录入 ──批量分类──> 加入衣橱 ──> 衣柜（后台自动抠图）
+衣柜 ──底部「搭配」──> 搭配列表 ──＋──> 新建搭配 ──槽位选衣──> 保存 ──> 搭配详情
+搭配详情 ──分享长图──> 系统分享 / 下载
 设置 ──导出/导入──> 文件系统
+设置 ──重新抠图全部──> 后台抠图队列（任意页面继续）
 ```
 
 ---
@@ -241,12 +251,12 @@ Tab 栏仅在这 4 个路由显示（`route.meta.tab === true`），详情/编�
 | --- | --- | --- |
 | `id` | string | **必须**为 `${itemId}:${kind}` |
 | `itemId` | string | 归属单品 |
-| `kind` | `'original' \| 'cutout' \| 'thumb'` | v1 只写 original（thumb 在 item 内） |
+| `kind` | `'original' \| 'cutout' \| 'thumb'` | v1 写 original；M2 起写 cutout（thumb 仍在 item 内） |
 | `blob` | Blob | WebP |
 
-> `thumb` 虽在枚举里，但 v1 不往 images 表写缩略图，避免重复存储。
+> `thumb` 虽在枚举里，但不往 images 表写缩略图，避免重复存储。
 
-### 5.4 `Outfit` / `OutfitItem`（M3 用，表已建）
+### 5.4 `Outfit` / `OutfitItem`（M3 已使用）
 
 ```
 Outfit:      id, name?, cover?(Blob), occasions:string[], seasons:Season[],
@@ -296,8 +306,9 @@ this.version(1).stores({
 4. `category`/`status`/`cleanState` 永远在枚举范围内。
 5. `wearCount >= 0`，`price >= 0`。
 6. `colorPrimary` 必须来自 `PALETTE` 的 hex（可由 `nearestPaletteHex` 吸附）。
-7. 删除单品时，同事务删除其所有图片。
-8. 写入 IndexedDB 前必须去掉 Vue reactive Proxy（见 §15.1）。
+7. 删除单品时，同事务删除其所有图片与 `outfitItems` 引用；删除搭配时同事务删除其套内单品。
+8. `outfitItems.slot` 必须等于对应单品的 `category`；同一搭配内同一单品最多出现一次；`layer` 在保存时重新归一化。
+9. 写入 IndexedDB 前必须去掉 Vue reactive Proxy（见 §15.1）。
 
 ---
 
@@ -343,7 +354,7 @@ name, brand, subcategory, location, material, ...tags, ...seasons, ...styles
 
 排序：`createdAt` 倒序（最新录入在最前）。
 
-> ⚠️ 已知缺陷：`seasons`/`styles` 拼的是枚举 id（`commute`），不是中文标签（`通勤`），所以搜「通勤」搜不到。M2 应改为拼接中文标签（见 §15.2）。
+> ⚠️ 已知缺陷（M2 未修，仍待办）：`seasons`/`styles` 拼的是枚举 id（`commute`），不是中文标签（`通勤`），所以搜「通勤」搜不到。修复方式见 §15.2 第 1 条。
 
 ### 6.4 分类与子类联动
 
@@ -448,11 +459,14 @@ hex → nearestPaletteHex(hex)   // 欧氏距离最近的色板项
 ```
 manifest.json
 items.json
+outfits.json
+outfitItems.json
 settings.json
 README.txt
 thumbs/<itemId>.webp
 images/<itemId>.original.webp
 images/<itemId>.cutout.webp     （M2 后可能出现）
+covers/<outfitId>.webp          （M3 后可能出现）
 ```
 
 ### 8.3 `manifest.json`
@@ -462,7 +476,7 @@ images/<itemId>.cutout.webp     （M2 后可能出现）
   "format": "wardrobe-backup",
   "version": 1,
   "exportedAt": "2026-10-20T01:15:00.000Z",
-  "counts": { "items": 1, "images": 2 }
+  "counts": { "items": 1, "images": 2, "outfits": 1, "outfitItems": 3 }
 }
 ```
 
@@ -487,9 +501,11 @@ images/<itemId>.cutout.webp     （M2 后可能出现）
 
 `SettingRow[]`（含 `lastBackupAt`）。
 
+> `outfits.json` 为 `Outfit[]`，移除 `cover` Blob 并记录 `coverFile`；`outfitItems.json` 为 `OutfitItem[]`。
+
 ### 8.6 导出流程
 
-1. 读 `items`、`images`、`settings` 全表。
+1. 读 `items`、`images`、`outfits`、`outfitItems`、`settings` 全表。
 2. 逐条把 Blob 转 `Uint8Array`，按 §8.2 的路径放入 map。
 3. `zip(files, { level: 6 })`（异步，避免长时间阻塞）。
 4. `Blob` + `<a download>` 触发下载（ObjectURL 10 秒后回收）。
@@ -504,12 +520,15 @@ unzipSync(ArrayBuffer)
   ├─ format !== 'wardrobe-backup' → "不是有效的衣橱备份文件"
   └─ version > 1 → "备份来自更新的版本，请先升级应用"
 读 items.json / settings.json（缺失 settings 允许）
+读 outfits.json / outfitItems.json（缺失时视为旧版备份，保留本机搭配）
 逐条校验：id 为 string、category 为 string；数组/对象字段给默认值
 thumb 从 thumbFile 读取并按 itemId 重建 Blob
 images 按 images/<itemId>.<kind>.webp 重建，id = `${itemId}:${kind}`
+cover 从 coverFile 读取并按 outfitId 重建 Blob
 单个 rw 事务：
-  replace → clear items + images（**不清 settings**）
+  replace → clear items + images；若备份含 outfits.json，同时 clear outfits + outfitItems
   merge   → 直接 bulkPut（按主键 upsert）
+  settings 不因 replace 清空
 ```
 
 导入前必须 `window.confirm` 告知模式（合并/覆盖）。
@@ -517,7 +536,9 @@ images 按 images/<itemId>.<kind>.webp 重建，id = `${itemId}:${kind}`
 ### 8.8 版本演进
 
 - 只增字段不删字段；
-- `version` 递增，导入端对低版本做默认值补齐；
+- M3 新增 `outfits.json` / `outfitItems.json` / `covers/` 为可选内容，`version` 保持 1：
+  旧版导入会忽略未知文件；新版导入旧备份时保留本机搭配；
+- 后续出现破坏性变更时再递增 `version`，导入端对低版本做默认值补齐；
 - 高版本文件拒绝导入并提示升级 App。
 
 ---
@@ -551,6 +572,19 @@ VitePWA({
   workbox: {
     globPatterns: ['**/*.{js,css,html,svg,png,webp,woff2}'],
     maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
+    // M2：抠图模型与资源走 CDN，首次下载后 CacheFirst 缓存，二次离线可用
+    runtimeCaching: [
+      {
+        urlPattern: /^https:\/\/staticimgly\.com\/.*/i,
+        handler: 'CacheFirst',
+        options: {
+          cacheName: 'imgly-cutout-model',
+          expiration: { maxEntries: 40, maxAgeSeconds: 60 * 60 * 24 * 365 },
+          cacheableResponse: { statuses: [0, 200] },
+          rangeRequests: true,
+        },
+      },
+    ],
   },
 })
 ```
@@ -645,7 +679,7 @@ npx wrangler pages deploy dist --project-name wardrobe
 
 | 组件 | Props | 事件 | 说明 |
 | --- | --- | --- | --- |
-| `AppTabBar` | — | — | 4 个 Tab，读取 `route.name` 高亮 |
+| `AppTabBar` | — | — | 4 个 Tab，读取 `route.name` 前缀高亮 |
 | `Icon` | `name, size=22, stroke=1.7` | — | 内联 SVG 描边图标，20 个图标名 |
 | `ToastHost` | — | — | 全局 Toast，底部居中，2.2s 自动消失 |
 | `ChipGroup` | `options, modelValue:string[], multiple=true, scroll=false` | `update:modelValue` | 单选/多选 chips；单选可再次点击取消 |
@@ -653,7 +687,12 @@ npx wrangler pages deploy dist --project-name wardrobe
 | `ColorPicker` | `primary?, secondary=[], maxSecondary=2` | `update:primary`, `update:secondary` | 8 列色板，主色单选、副色多选 |
 | `LevelPicker` | `value?, labels?, lowLabel?` | `update:value` | 1–5 档，柱状高度递增 |
 | `PhotoField` | `blob, processing?, hasStored?` | `pick(file)`, `clear` | 拍照/相册双入口，预览 + 重拍/移除 |
-| `ItemCard` | `item` | — | 衣柜网格卡片，含清洁状态角标与主色点 |
+| `ItemCard` | `item` | — | 衣柜网格卡片，含清洁状态角标与主色点；`item.hasCutout` 时透明底 + 棋盘格 |
+| `BlobThumb` | `blob?` | — | `Blob → ObjectURL` 的 `<img>`，用于连拍队列/分类缩略图 |
+| `CutoutIndicator` | — | — | 全局抠图进度胶囊，挂在 `App.vue`；完成时 Toast 汇总成功/失败数 |
+| `OutfitPreview` | `pieces, aspectRatio?, emptyText?` | — | 按槽位与 `layer` 用 DOM 绝对定位叠放缩略图，无槽位时显示空态 |
+| `OutfitCard` | `outfit, pieces, count` | — | 搭配列表卡片，优先显示 `cover`，无封面时用 `OutfitPreview` |
+| `SlotPickerSheet` | `open, slot, items, excludeIds, seasons` | `close`, `select(item)` | 底部候选抽屉，默认过滤「干净 · 在役 · 当季」，可切「显示全部」 |
 
 图标名：`grid, shirt, sun, gear, plus, camera, photo, back, trash, pencil, search, download, upload, close, check, alert, sparkle, hanger`。
 
@@ -687,23 +726,56 @@ npx wrangler pages deploy dist --project-name wardrobe
 #### 单品详情 `/item/:id`
 
 - 顶部返回 + 标题 + 编辑按钮。
-- 1:1 大图（棋盘格底），点击全屏查看（黑底 + 关闭按钮）。
+- 1:1 大图，点击全屏查看（黑底 + 关闭按钮）。默认显示抠图（透明底 + 棋盘格）；无抠图时显示原图。
+- 图片下方「原图 / 抠图」切换；无抠图时显示「一键抠图」（WebGPU 优先、失败回退 CPU，完成后自动切到抠图）。
 - 操作行：「今天穿了」「编辑」。
 - 清洁状态 4 个 chips，点击即改。
 - Facts 行：颜色（带色点）、季节、风格、标签。
 - 详细信息 dl：分类、图案、材质、品牌、尺码、价格、购入日期、存放位置、正式度、保暖度、在役状态、穿着次数、最后穿着。
 - 「删除这件单品」红色按钮（确认后删除）。
 
+#### 连续录入 `/capture`（M2）
+
+- 无 Tab 栏，顶部返回；分两步：`capture`（拍摄队列）与 `classify`（批量分类）。
+- 空态：大按钮「拍第一件」+「相册批量」。
+- 队列态：横向滚动缩略图（处理中遮罩 / 失败角标 + 重试或移除），主按钮「拍下一件」，
+  次按钮「下一步：分类（N 件）」；有处理中或失败时禁用。
+- 分类态：每件一张卡片（缩略图 + 可选名称 + 7 个分类按钮），分类默认沿用上一张；
+  底部固定「加入衣橱（N 件）」，保存后 Toast「已加入 N 件」并加入后台抠图队列。
+- 队列与分类两步之间用 `onBeforeRouteLeave` 拦截未保存离开（`window.confirm`）。
+
+#### 搭配列表 `/outfits`
+
+- 顶部 sticky：标题「搭配」+ 副标题「共 N 套 · 用槽位把单品拼成套装」+ 右上 `+`。
+- 网格卡片：封面（无封面时用叠穿缩略图）、名称、单品数、前 2 个场合、收藏星标。
+- 空态引导「新建第一套」；已有搭配时显示 FAB。
+
+#### 新建/编辑搭配 `/outfits/new`、`/outfits/:id/edit`
+
+- 区块顺序：叠穿预览 → 名称 → 适合季节 → 场合 → 7 个纵向槽位卡片 → 备注。
+- 槽位卡片显示已选单品缩略图与名称，点击打开底部候选抽屉；每个槽位可单独移除。
+- 配饰槽允许多件，可「再添加一件」；其它槽位再次选择即替换。
+- 候选默认「干净 · 在役 · 当季」，可切「显示全部」；已用于其它槽位的单品不再出现。
+- 保存时至少需要 1 件单品；保存后生成 Canvas 封面并跳到搭配详情。
+
+#### 搭配详情 `/outfits/:id`
+
+- 顶部返回 + 名称 + 收藏 + 编辑；大图叠穿预览。
+- 操作行：「分享长图」「编辑」。
+- 单品清单按槽位分组，点击进入单品详情；单品被删除时显示「单品已删除」。
+- 备注与「删除这套搭配」红色按钮（二次确认）。
+
 #### 设置 `/settings`
 
 1. 衣橱概览：3 个统计卡 + 分类分布列表。
 2. 备份与迁移：备份提示（今天/ N 天前/超过 7 天警告）+ 导出 + 导入模式 chips + 选择文件。
 3. 本地存储：用量条 + 持久化状态 + 申请按钮。
-4. 安装到主屏幕：iOS/Android 操作说明。
+4. 照片与抠图（M2）：已抠图 N / M 件说明 + 队列进度条 + 「重新抠图全部」。
+5. 安装到主屏幕：iOS/Android 操作说明。
 
-#### 占位页 `/outfits`、`/today`
+#### 占位页 `/today`
 
-- 图标 + 标题 + 一句说明 + 「计划于 M3/M4 上线」徽标。
+- 图标 + 标题 + 一句说明 + 「计划于 M4 上线」徽标。
 
 ### 10.5 文案规范
 
@@ -745,15 +817,20 @@ wardrobe/
    │  ├─ types.ts            # 全部实体类型
    │  ├─ constants.ts        # 分类/枚举/色板/标签映射
    │  ├─ db.ts               # Dexie 定义与版本
-   │  ├─ repo.ts             # item/image/setting 读写 + newId/nowIso
+   │  ├─ repo.ts             # item/image/outfit/setting 读写 + newId/nowIso
    │  └─ repo.spec.ts
-   ├─ services/
-   │  ├─ image.ts            # 压缩、缩略图、主色、色板吸附
-   │  ├─ image.spec.ts
-   │  ├─ backup.ts           # zip 导出/导入
-   │  ├─ backup.spec.ts
-   │  └─ storage.ts          # persist / estimate / formatBytes
-   ├─ stores/wardrobe.ts     # 单品状态、筛选、CRUD、toPersistable
+    ├─ services/
+    │  ├─ image.ts            # 压缩、缩略图、主色、色板吸附
+    │  ├─ image.spec.ts
+    │  ├─ cutout.ts           # M2 抠图：动态 import + WebGPU/CPU + 裁边补边 + 透明 WebP
+    │  ├─ collage.ts          # M3 叠穿布局、封面合成、分享长图 / 系统分享
+    │  ├─ backup.ts           # zip 导出/导入（含 outfits/outfitItems）
+    │  ├─ backup.spec.ts
+    │  └─ storage.ts          # persist / estimate / formatBytes
+    ├─ stores/
+    │  ├─ wardrobe.ts         # 单品状态、筛选、CRUD、toPersistable、attachCutout
+    │  ├─ outfits.ts          # M3 套装 CRUD、套内单品、layer 计算
+    │  └─ cutout.ts           # M2 后台抠图队列（串行、进度、失败计数）
    ├─ composables/
    │  ├─ useObjectUrl.ts     # Blob → ObjectURL，自动回收
    │  └─ useToast.ts         # 模块级单例 Toast
@@ -802,14 +879,51 @@ db 不得 import stores/views
 | 21 | 离线 | 已安装且访问过一次后，断网可打开 app shell |
 | 22 | 移动端适配 | 390×844 下无横向滚动；安全区正确；无 300ms 延迟 |
 
-### 12.2 当前验证状态
+### 12.2 功能清单（M2 + M3）
+
+| # | 功能 | 验收标准 |
+| --- | --- | --- |
+| 23 | 端上抠图 | 拍照后自动生成透明底；失败不阻断保存，可重试 |
+| 24 | WebGPU 优先 | 支持 WebGPU 时用 GPU，否则/失败回退 CPU |
+| 25 | 抠图裁边补边 | 裁掉透明边界并四周补 4px，输出 WebP(alpha)，不支持时 PNG |
+| 26 | 透明底缩略图 | 抠图成功后覆盖 `item.thumb`，卡片/详情默认透明底 + 棋盘格 |
+| 27 | 后台抠图队列 | 串行执行，任意页面可见进度，完成 Toast 汇总成功/失败 |
+| 28 | 连续拍摄队列 | `/capture` 可连拍 N 件，队列可预览、失败可重试、可移除 |
+| 29 | 批量分类保存 | 每张一排 7 类按钮，默认沿用上张；一次入库并提示「已加入 N 件」 |
+| 30 | 重新抠图全部 | 设置页一键入队全部有原图的单品，带进度与失败计数 |
+| 31 | 搭配列表 | 展示封面或叠穿缩略图、名称、单品数、场合与收藏 |
+| 32 | 槽位选衣 | 7 个槽位可单独选择/更换/移除；配饰可多件，其它槽位单选 |
+| 33 | 候选过滤 | 抽屉默认「干净 · 在役 · 当季」，可切「显示全部」；排除已用单品 |
+| 34 | 叠穿预览 | 修改槽位后即时刷新，按槽位和 `layer` 叠放 |
+| 35 | 保存与复用 | 至少 1 件即可保存；列表/详情可再次打开、编辑、收藏、删除 |
+| 36 | Canvas 封面 | 保存时生成 1080×1440 封面；失败不阻断保存 |
+| 37 | 分享长图 | 生成 1080×1620 图片（预览 + 名称 + 标签 + 单品清单 + 日期）；系统分享优先，降级下载 |
+| 38 | 搭配备份 | 导出/导入包含 `outfits / outfitItems / covers`；旧备份导入保留本机搭配 |
+
+### 12.3 当前验证状态
 
 ```
 npm run typecheck   ✔ 通过
-npm test            ✔ 3 文件 / 8 用例通过
-npm run build       ✔ 通过，PWA precache 28 项
+npm test            ✔ 3 文件 / 14 用例通过
+npm run build       ✔ 通过，PWA precache 45 项
 Playwright 冒烟     ✔ 录入→详情→网格→导出备份，0 控制台错误
+Playwright M2 E2E   ✔ 连拍上传→分类保存→后台抠图→衣柜透明底→详情切换
+Playwright M3 E2E   ✔ 7 槽位选衣（配饰多件）→ 保存生成封面 → 详情/分享下载 → 收藏 → 编辑移除 → 列表封面，0 控制台错误
+抠图实测（无头）     ✔ 冷启动 71s（含 88MB 模型下载）；热启动 9.9s（单线程回退）
 ```
+
+### 12.4 里程碑进度
+
+| 里程碑 | 内容 | 状态 |
+| --- | --- | --- |
+| M1 | 录入 / 详情 / 筛选搜索 / 统计 / 备份 / PWA | ✅ 已实现并上线（`https://wardrobe-eec.pages.dev`） |
+| M2 | 端上抠图（`@imgly/background-removal`）+ 连续拍摄队列 | ✅ 已实现并上线（commit `08639f4`） |
+| M3 | 槽位搭配、叠穿预览、分享长图 | ✅ 已实现（M3） |
+| M4 | 今天 + 穿着记录 + 天气 | ⏳ 设计完成（§14.3），未开发 |
+| M5 | 规则推荐 + 统计 | ⏳ 设计完成（§14.4），未开发 |
+
+**下一步建议**：M4 今日页与穿着记录；先补 `wearLogs` 的备份导出/导入（§14.3）。
+顺手可修：§6.3 / §15.2 第 1 条的搜索中文标签缺陷。
 
 ---
 
@@ -819,6 +933,7 @@ Playwright 冒烟     ✔ 录入→详情→网格→导出备份，0 控制台�
 
 - 只测**纯逻辑与数据层**：repository、备份往返、颜色吸附。
 - 图像处理依赖 Canvas，jsdom 无法真实渲染 → 只测纯函数 `nearestPaletteHex`。
+- 抠图依赖 Canvas + ONNX/WASM，jsdom 无法运行 → 用真实无头 Chromium（`E:\workspace\HomemadeTools\headless_browser`）跑一次真实抠图与端到端流程。
 - UI 用 Playwright 做冒烟，不做快照。
 
 ### 13.2 环境
@@ -845,8 +960,8 @@ globalThis.Blob = NodeBlob as unknown as typeof Blob
 
 | 文件 | 用例 |
 | --- | --- |
-| `db/repo.spec.ts` | 写入读取单品；图片独立存储；删除单品级联删除图片 |
-| `services/backup.spec.ts` | 导出→清库→导入完整还原（含 thumb 与原图字节）；merge 幂等；非法文件报错 |
+| `db/repo.spec.ts` | 单品/图片读写与级联删除；套装与套内单品 CRUD、整体替换、删除单品时清理套装引用 |
+| `services/backup.spec.ts` | 导出→清库→导入完整还原（含 thumb、原图、套装、套内单品与封面）；merge 幂等；replace 清理旧搭配；非法文件报错 |
 | `services/image.spec.ts` | 色板精确命中；越界颜色吸附到最近项 |
 
 ### 13.4 每个用例的 beforeEach
@@ -858,15 +973,25 @@ await db.open()
 
 ---
 
-## 14. 待开发功能详细设计
+## 14. 后续功能详细设计
 
-### 14.1 M2 — 端上抠图 + 连续拍摄队列
+进度总览见 §12.4。
+
+### 14.1 M2 — 端上抠图 + 连续拍摄队列（已实现）
 
 > 状态：已实现（代码 M2）。抠图优先 WebGPU、失败回退 CPU；模型走 CDN 并纳入 SW 运行时缓存。
 
 **目标**：让搭配预览好看；让批量录入 20 件成为可能。
 
 **依赖**：`@imgly/background-removal`（浏览器端 ONNX，模型首次下载后缓存，无需服务端）。
+
+**实现要点（与文档原始设想的差异）**
+
+- 模型用 `isnet_fp16`（约 88MB）；优先 `device: 'gpu'`（WebGPU），不可用或抛错时回退 `device: 'cpu'`。
+- 输出 WebP(alpha)；浏览器不支持 WebP alpha 时回退 PNG（**不能**回退 JPEG，会丢 alpha）。
+- 抠图成功后同时生成透明底缩略图并覆盖 `item.thumb`，这样卡片与后续搭配预览无需另读 `cutout` 大图。
+- 抠图队列独立于页面（`stores/cutout.ts`），保存/离开页面后继续执行；全局 `CutoutIndicator` 显示进度。
+- 模型与 wasm 走 CDN，已加入 Workbox `runtimeCaching`（CacheFirst）。
 
 **图片流程变更**
 
@@ -901,22 +1026,24 @@ await db.open()
 
 ---
 
-### 14.2 M3 — 槽位搭配
+### 14.2 M3 — 槽位搭配（已实现）
+
+> 状态：已实现。手动选槽位组合，不做自由拖拽；封面与分享共用 `services/collage.ts` 的布局函数。
 
 **目标**：把单品组合成可复用的「套装」。
 
-**数据结构**：直接使用已建好的 `outfit` / `outfit_item`。
+**数据结构**：`outfit` / `outfitItem`，字段见 §5.4。
 
 **槽位规则**
 
 - 固定顺序：`外套 → 上装 → 内搭 → 下装 → 鞋 → 箱包 → 配饰`。
 - 每个槽位默认 1 件；`配饰` 允许多件（`layer` 递增）。
-- 同一单品不能出现在同套装的多个槽位（配饰除外）。
-- `layer` 决定渲染层级：外套最上、内搭最下。
+- 同一单品不能出现在同套装的多个槽位（配饰槽内也去重）。
+- `layer` 决定渲染层级：按 `layer` 升序绘制，数字大的在上层（配饰 70+ 最上）。
 
 **交互（不用自由拖拽）**
 
-- 搭配编辑页为**纵向槽位卡片**：
+- 搭配编辑页：顶部叠穿预览 + 名称 / 季节 / 场合 + **纵向槽位卡片**：
   ```
   [外套]  ← 点击选择 / 更换
   [上装]
@@ -924,15 +1051,20 @@ await db.open()
   [下装]
   [  鞋 ]
   [  包 ]
-  [配饰]  ← 可多个
+  [配饰]  ← 可多个，「再添加一件」
   ```
-- 点击槽位 → 底部抽屉：候选单品网格，默认过滤「干净 + 当前季节」。
-- 选满后自动生成纵向叠穿预览（缩放后居中，避免比例失衡）。
+- 点击槽位 → 底部抽屉：候选单品网格，默认过滤「干净 + 在役 + 当前季节」，
+  可切「显示全部」；已用于其它槽位的单品不出现。
+- 选择后即时刷新叠穿预览；其它槽位再次选择即替换，配饰追加。
+- 至少 1 件才能保存；保存后生成封面并进入详情。
 
 **封面与分享**
 
-- 保存时用 Canvas 合成 1080×1440 预览图作为 `Outfit.cover`。
-- 「分享长图」：预览 + 名称 + 单品清单 + 日期水印，`navigator.share` 优先，降级为下载。
+- 保存时用 Canvas 合成 1080×1440 预览图作为 `Outfit.cover`；失败只忽略，不阻断保存。
+- 「分享长图」1080×1620：上方叠穿预览（占 1180px 高），下方名称、季节/场合标签、
+  按槽位分组的完整单品清单（最多 7 个槽位）与日期水印。
+- `navigator.share({ files })` 优先；不支持或失败时降级下载 `outfit-<名称>.png`；
+  用户取消分享时提示已取消。
 
 **验收**
 
@@ -940,9 +1072,36 @@ await db.open()
 - 修改槽位后预览即时刷新。
 - 套装列表显示封面与单品数。
 
+**实现约定**
+
+1. **`layer` 取值**：主槽位按固定顺序取 `(index + 1) × 10`（外套 10、上装 20…… 配饰 70）；
+   配饰槽内第 n 件为 `70 + n`。编辑时每次增删都会重新归一化。
+2. **合成参数（`services/collage.ts` 统一实现，不得散落各页）**：
+   - `pieceLayout(slot, index, count)` 返回归一化中心点与宽高；Canvas 与 `OutfitPreview` 共用。
+   - 槽位布局：外套 0.80×0.56 @ (0.5, 0.40)、上装 0.64×0.46 @ (0.5, 0.41)、
+     内搭 0.50×0.36 @ (0.5, 0.43)、下装 0.58×0.42 @ (0.5, 0.69)、
+     鞋 0.34×0.18 @ (0.5, 0.90)、包 0.30×0.30 @ (0.82, 0.70)、
+     配饰 0.24×0.24 @ (0.18, 0.76)。
+   - 配饰多件：2 件左右分列；≥3 件沿底部 0.1→0.9 横向均分，尺寸缩到 0.18。
+   - 每件按槽位盒等比缩放（contain），居中绘制，带投影；绘制顺序即 `layer` 升序。
+   - 预览用 DOM 绝对定位（item.thumb），导出用同参数 Canvas；不做 720 中间画布。
+3. **候选过滤**：默认「`cleanState === 'clean'` ∩ 当季 ∩ `status === 'active'`」，
+   `outfit.seasons` 为空时不做季节过滤；「显示全部」关闭全部过滤。
+4. **路由**：`/outfits`、`/outfits/new`、`/outfits/:id`、`/outfits/:id/edit`；
+   `AppTabBar` 高亮用 `String(route.name).startsWith(match)`。
+5. **备份**：`services/backup.ts` 已包含 `outfits / outfitItems / covers`；
+   `manifest.counts` 增加 `outfits / outfitItems`。文件为可选，`version` 保持 1，
+   旧备份导入时保留本机搭配（§8.7 / §8.8）。
+6. **实际文件**：`services/collage.ts`、`stores/outfits.ts`、`components/OutfitPreview.vue`、
+   `components/SlotPickerSheet.vue`、`components/OutfitCard.vue`、`views/OutfitsView.vue`、
+   `views/OutfitEditView.vue`、`views/OutfitDetailView.vue`。
+7. **页面刷新**：hash 路由切换不会重建 Pinia，搭配页面进入时 `wardrobe.load(true)` /
+   `outfits.load(true)`，避免单品删除或导入后仍用旧缓存。
+8. **明确不做**：自由拖拽排版、自动推荐组合（M5）、穿着记录写入（M4）。
+
 ---
 
-### 14.3 M4 — 今天 + 穿着记录
+### 14.3 M4 — 今天 + 穿着记录（已设计，未开发）
 
 **目标**：把「看衣柜」变成「决定穿什么」。
 
@@ -982,7 +1141,7 @@ await db.open()
 
 ---
 
-### 14.4 M5 — 规则推荐 + 统计
+### 14.4 M5 — 规则推荐 + 统计（已设计，未开发）
 
 **目标**：不依赖机器学习，用可解释规则给出「能穿出门」的组合。
 
@@ -1043,7 +1202,7 @@ for slot in [上装, 下装, 鞋]:
 | --- | --- | --- | --- |
 | 1 | 搜索匹配的是枚举 id（`commute`）而非中文（`通勤`） | 搜中文风格/季节无结果 | 在 haystack 中拼接 `STYLES`/`SEASONS` 的 label |
 | 2 | 无重复检测 | 同一件衣服可能录两次 | 保存时比较名称 + 主色 + 分类，提示疑似重复 |
-| 3 | 无批量编辑/批量删除 | 录入几十件后整理麻烦 | M2 配合连拍队列做批量分类 |
+| 3 | 批量分类后不可批量改分类/删除 | 录入几十件后整理麻烦 | 衣柜加多选模式，复用连拍分类的 7 类按钮 |
 | 4 | 删除不可撤销 | 误删无法恢复 | 软删除（`deletedAt`）或 7 天回收站 |
 | 5 | 备份整包在内存中构建 | 数百件时可能占 100MB+ 内存 | 改用 fflate 流式 zip 或分卷 |
 | 6 | 使用 `window.confirm` | 视觉与系统不一致 | 自定义底部确认弹层 |
@@ -1056,6 +1215,8 @@ for slot in [上装, 下装, 鞋]:
 | --- | --- | --- |
 | iOS 存储被回收 | 长期不打开或空间紧张时 IndexedDB 可能被清理 | 引导添加到主屏 + `persist()` + 每周备份提醒 |
 | 域名隔离 | 换域名 = 空库；预览域名与正式域名不同 | 固定正式域名；文档与 UI 明示 |
+| 抠图模型 CDN 不稳 | 首次下载 88MB，实测出现多次连接重置后重试成功 | 已加 SW 缓存；如长期不稳，改为自托管（Pages 单文件 ≤25MB，需 R2 或换小模型） |
+| 抠图首帧偏慢 | 无多线程 wasm 时单线程推理约 10s | 真机 WebGPU 优先；批量场景交给后台队列，不阻塞操作 |
 | Safari 的 WebP 编码 | 旧版可能不支持 `toBlob('image/webp')` | 已实现 JPEG 降级 |
 | 相机需要安全上下文 | HTTP 下 `<input capture>` 可用，但 `getUserMedia` 不可用 | 当前只用 file input，无影响 |
 | 开发模式无 Service Worker | `vite dev` 下不可离线 | 用 `npm run build && npm run preview` 或部署后验证 |
@@ -1072,7 +1233,7 @@ for slot in [上装, 下装, 鞋]:
 npm create vite@latest wardrobe -- --template vue-ts
 cd wardrobe
 npm install
-npm i vue-router@4 pinia dexie fflate
+npm i vue-router@4 pinia dexie fflate @imgly/background-removal onnxruntime-web@1.21.0
 npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
 ```
 
@@ -1107,49 +1268,69 @@ npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
 1. `db/types.ts` — 按 §5 定义全部接口。
 2. `db/constants.ts` — 按 §17 写死全部枚举与色板。
 3. `db/db.ts` — Dexie 类 + §5.7 的索引。
-4. `db/repo.ts` — `newId / nowIso / imageKey / listItems / getItem / putItem / putImage / getImage / listImages / deleteItem / getSetting / setSetting / countItems`。
+4. `db/repo.ts` — `newId / nowIso / imageKey / listItems / getItem / putItem / putImage / getImage / listImages / deleteItem / listOutfits / getOutfit / putOutfit / listOutfitItems / replaceOutfitItems / deleteOutfit / getSetting / setSetting / countItems`。
    - `newId` 必须有 `crypto.randomUUID` 不可用时的降级。
+   - `deleteItem` 同事务清理 `images` 与 `outfitItems`。
 
-验收：`repo.spec.ts` 的三个用例通过。
+验收：`repo.spec.ts` 的全部用例通过（含套装 CRUD 与级联）。
 
 ### 步骤 5：服务层
 
 1. `services/image.ts` 按 §7 实现，导出 `processPhoto` 与 `nearestPaletteHex`。
-2. `services/storage.ts` 实现 `requestPersistentStorage / isStoragePersistent / storageEstimate / formatBytes`。
-3. `services/backup.ts` 按 §8 实现，导出 `buildBackup / backupFileName / downloadBlob / importBackup`。
+2. `services/cutout.ts` 按 §7.6 实现，导出 `createCutout(source, onProgress?) → { cutout, thumb }`。
+   - 动态 `import('@imgly/background-removal')`；先试 `device:'gpu'`，失败回退 `'cpu'`。
+   - 裁透明边 + 补 4px；输出 WebP(alpha)，回退 PNG。
+3. `services/storage.ts` 实现 `requestPersistentStorage / isStoragePersistent / storageEstimate / formatBytes`。
+4. `services/backup.ts` 按 §8 实现，导出 `buildBackup / backupFileName / downloadBlob / importBackup`；包含 `outfits / outfitItems / covers`。
+5. `services/collage.ts` 实现 `pieceLayout / renderOutfitCover / buildOutfitShareImage / shareOutfitImage`。
+   - `pieceLayout` 同时供 Canvas 与 `OutfitPreview.vue` 使用，槽位布局不得散落两处。
+   - 封面 1080×1440；分享图 1080×1620；优先 `navigator.share({files})`，不可用则下载。
 
-验收：`npm test` 全绿（含备份往返）。
+验收：`npm test` 全绿（含备份往返）；无头 Chromium 能对一张图跑通 `createCutout`。
 
 ### 步骤 6：状态层
 
 1. `stores/wardrobe.ts`
    - state：`items / loaded / loading / search / category / clean`
    - getters：`total / filtered / countByCategory / categoryStats / totalValue / wearCountTotal`
-   - actions：`load / saveItem / removeItem / markWorn / setCleanState`
+   - actions：`load / saveItem / attachCutout / removeItem / markWorn / setCleanState`
+   - `saveItem` 接受 `{ item, original?, cutout?, cutoutThumb? }`；换新原图但无新抠图时必须删旧 `cutout` 并置 `hasCutout=false`
    - **`toPersistable` 必须存在**（§15.1）
-2. `composables/useObjectUrl.ts` — watch Blob，创建/回收 URL。
-3. `composables/useToast.ts` — 模块级 `message` + `show`。
+2. `stores/cutout.ts` — 后台抠图队列：`enqueue(ids, resetWhenIdle?)`、`running/total/done/failed/percent`；串行执行，失败只计数不中断。
+3. `stores/outfits.ts` — `outfits / pieces / loaded`；`byId / piecesFor / countFor / load / saveOutfit / setCover / setFavorite / removeOutfit`。
+   - `layerFor(slot, index)`：主槽位 `(SLOTS.indexOf(slot)+1)*10`，配饰再加序号。
+   - `saveOutfit` 必须在事务外先 `toPersistable`，再 `replaceOutfitItems`。
+4. `composables/useObjectUrl.ts` — watch Blob，创建/回收 URL。
+5. `composables/useToast.ts` — 模块级 `message` + `show`。
 
-验收：手动调用 `saveItem` 不报 DataCloneError。
+验收：手动调用 `saveItem / saveOutfit` 不报 DataCloneError。
 
 ### 步骤 7：组件
 
-按 §10.3 实现 9 个组件。注意：
+按 §10.3 实现组件。注意：
 
 - `ChipGroup` 单选时点击已选项要能取消。
 - `ColorPicker` 副色达到上限后点击无效果。
 - `PhotoField` 必须有两个 file input（相机带 `capture="environment"`）。
 - `Icon` 用 `currentColor`，不引入图标库。
+- `BlobThumb` 负责 `Blob → ObjectURL`（连拍/分类缩略图），不要在循环里手动建 URL。
+- `CutoutIndicator` 挂在 `App.vue`，监听 `running` 由真变假时 Toast 汇总结果。
+- `OutfitPreview` 的布局必须调用 `services/collage.ts` 的 `pieceLayout`。
+- `SlotPickerSheet` 用 `Teleport` 挂到 body，`z-index` 高于 Tab 栏与保存条。
 
 验收：组件在暗色背景下无白边、无错位。
 
 ### 步骤 8：页面与路由
 
 1. `router/index.ts` 按 §4.2，含 `scrollBehavior`。
-2. `App.vue`：`router-view` + 条件 `AppTabBar`（`route.meta.tab`）+ `ToastHost`。
-3. 依次实现 `WardrobeView`、`ItemEditView`、`ItemDetailView`、`SettingsView`、`ComingSoonView`，细节按 §10.4。
+2. `App.vue`：`router-view` + 条件 `AppTabBar`（`route.meta.tab`）+ `CutoutIndicator` + `ToastHost`。
+3. 依次实现 `WardrobeView`、`ItemEditView`、`ItemDetailView`、`CaptureView`、`OutfitsView`、`OutfitEditView`、`OutfitDetailView`、`SettingsView`、`ComingSoonView`，细节按 §10.4。
+4. `ItemEditView`：选图后先出预览再后台抠图；保存前若抠图未完成要 `await`，失败则按「无抠图」保存。
+5. `CaptureView`：`reactive` 创建队列项（否则直接改目标对象不触发渲染），保存后 `cutout.enqueue(ids, true)` 再 `router.replace('/')`。
+6. `OutfitEditView`：保存后 `renderOutfitCover`，封面失败只 Toast 不阻断；`OutfitDetailView` 分享失败回退下载。
+7. 搭配相关页面加载时必须强制刷新 wardrobe/outfits store，避免从单品页返回后引用被删除的单品。
 
-验收：走通 §12.1 的 22 条。
+验收：走通 §12.1 的 22 条、§12.2 的 16 条。
 
 ### 步骤 9：PWA 资源
 
@@ -1176,6 +1357,8 @@ npm run build
 5. 设置 → 导出备份 → 文件下载成功
 6. 清库 → 导入备份 → 数据恢复
 7. 刷新页面 → 数据仍在
+8. M2：相机 → 连续录入 → 连拍 3 件 → 批量分类 → 加入衣橱 → 后台抠图完成 → 卡片透明底 → 详情「原图/抠图」切换
+9. M2：设置 → 重新抠图全部 → 进度跑完 → 计数更新
 
 全部通过即为功能等价。
 
@@ -1283,7 +1466,7 @@ npm run build
 
 | 维度 | 一致度 | 保障来源 |
 | --- | --- | --- |
-| 功能与页面流程 | 100% | §4 路由表、§12 验收标准（22 条） |
+| 功能与页面流程 | 100% | §4 路由表、§12 验收标准（38 条） |
 | 数据模型与备份互通 | 100% | §5 字段表 + 不变量、§8 zip 结构 |
 | 业务规则与算法 | 100% | §6 规则、§7 参数与伪代码 |
 | 文案 | 100% | 附录 A |
@@ -1383,7 +1566,53 @@ npm run build
 | 确认框 | 删除「{名称}」？此操作不可撤销。 |
 | aria | 返回 / 编辑 / 关闭 |
 
-### A6 设置（`SettingsView`）
+### A6 搭配（M3）
+
+`OutfitsView`：
+
+| 位置 | 文案 |
+| --- | --- |
+| 标题/副标题 | 搭配 / 共 {n} 套 · 用槽位把单品拼成套装 |
+| 右上/FAB aria | 新建搭配 |
+| 空库标题 | 还没有搭配 |
+| 空库说明 | 把不同单品组合成一套，保存后随时复用 |
+| 空库按钮 | 新建第一套 |
+| 卡片兜底名 | 未命名搭配 |
+| 卡片副文案 | {n} 件 · {场合1 · 场合2} |
+
+`OutfitEditView`：
+
+| 位置 | 文案 |
+| --- | --- |
+| 标题 | 新建搭配 / 编辑搭配 |
+| 名称占位 | 例如：通勤周一 |
+| 预览空态 | 选择单品后自动叠穿预览 |
+| 字段 | 搭配名称（可选）/ 适合季节 / 场合 / 备注 |
+| 槽位提示 | 选择 / 更换 / 点击选择{槽位} / 再添加一件 |
+| 按钮 | 创建搭配 / 保存修改 / 保存 / 保存中 |
+| Toast | 先至少选择一件单品 / 已创建搭配 / 已保存 / 保存失败，请重试 / 搭配不存在 |
+
+`OutfitDetailView`：
+
+| 位置 | 文案 |
+| --- | --- |
+| 兜底标题 | 未命名搭配 |
+| 按钮 | 分享长图 / 生成中 / 编辑 / 删除这套搭配 |
+| 收藏 aria | 收藏 / 取消收藏 |
+| Toast | 已收藏 / 已取消收藏 / 这套搭配还没有单品 / 已分享 / 已生成分享图 / 已取消分享 / 生成分享图失败，请重试 |
+| 确认框 | 删除「{名称}」？此操作不可撤销。 |
+| 空引用 | 单品已删除 |
+
+`SlotPickerSheet`：
+
+| 位置 | 文案 |
+| --- | --- |
+| 标题 | 选择{槽位} |
+| 筛选 | 干净 · 在役 · 当季 / 显示全部 |
+| 空态（默认） | 没有符合「干净 · 在役 · 当季」的单品 |
+| 空态（全部） | 衣橱里还没有这一类的单品 |
+
+### A7 设置（`SettingsView`）
 
 | 位置 | 文案 |
 | --- | --- |
@@ -1399,23 +1628,22 @@ npm run build
 | 字段 | 导入方式 → 合并（保留现有）/ 覆盖（清空后导入） |
 | 确认框 | 将「{文件名}」导入（{覆盖现有数据 \| 与现有数据合并}），继续？ |
 | Toast | 已导出 {size} / 导出失败，请重试 |
-| Toast | 导入完成：{n} 件单品 / 导入失败 |
+| Toast | 导入完成：{n} 件单品、{m} 套搭配 / 导入失败 |
 | 存储 | 已用 {size} / 可用配额 {size} |
 | 持久化 | 已开启持久化存储 / 未开启持久化，系统可能清理数据 |
 | 按钮 | 申请持久化存储 |
 | Toast | 已开启持久化存储 / 浏览器未授予，建议定期导出备份 |
 | 安装说明 | iPhone：Safari → 分享 → 添加到主屏幕。<br>Android：Chrome → 菜单 → 安装应用。<br>从主屏图标打开可获得独立窗口和更稳定的本地存储。 |
 
-### A7 占位页（`ComingSoonView`）
+### A8 占位页（`ComingSoonView`）
 
 | 路由 | 标题 | 说明 | 徽标 |
 | --- | --- | --- | --- |
-| `/outfits` | 搭配 | 用槽位卡片把单品拼成套装，自动叠穿预览。 | 计划于 M3 上线 |
 | `/today` | 今天 | 按天气和场合挑一套，一键记录穿着。 | 计划于 M4 上线 |
 
 通用句式：`{标题}功能还在开发中`。
 
-### A8 备份模块错误文案
+### A9 备份模块错误文案
 
 | 场景 | 文案 |
 | --- | --- |
@@ -1424,7 +1652,7 @@ npm run build
 | version 过高 | 备份来自更新的版本，请先升级应用 |
 | 缺少文件 | 备份缺少 {文件名} |
 
-### A9 备份内置说明文件（`README.txt`）
+### A10 备份内置说明文件（`README.txt`）
 
 ```
 这是「衣橱」的备份文件。请勿解压修改。在新设备上用「导入备份」即可恢复。
@@ -1474,6 +1702,8 @@ npm run build
 | `pinia` | 4.1.0 | 状态管理 |
 | `dexie` | 4.4.6 | IndexedDB 封装 |
 | `fflate` | 0.8.3 | zip 导出/导入 |
+| `@imgly/background-removal` | 1.7.0 | M2 端上抠图（ONNX） |
+| `onnxruntime-web` | 1.21.0 | 抠图推理运行时（peer 依赖，勿随意升级） |
 
 ### 开发依赖
 
@@ -1497,6 +1727,9 @@ npm run build
 - `vite.config.ts` 的 `defineConfig` **必须**从 `vitest/config` 导入，否则 `test` 字段类型报错。
 - `tsconfig.app.json` 的 `types` 需包含 `node`，因为 `src/test/setup.ts` 引用 `node:buffer`。
 - TS 6 下 `baseUrl` 已弃用，`paths` 直接相对 tsconfig 解析。
+- `@imgly/background-removal@1.7.0` 的 peer 依赖是 `onnxruntime-web@1.21.0`（非 dev 版本号），换版本可能导致 wasm 加载失败。
+- onnxruntime 的 wasm 会被 Vite 打进 `dist/assets`（约 24MB），Cloudflare Pages 单文件上限 25MB，不要升级到更大的 wasm 变体。
+- 无 COOP/COEP 时 ORT 会自动从多线程回退单线程（有控制台 warning，属正常）。
 
 ---
 
@@ -1524,6 +1757,13 @@ npm run build
 | 16 | ID 生成 | `crypto.randomUUID()`，不可用时降级 `id-{时间36}-{随机}` |
 | 17 | 名称回退 | `name → subcategory → 分类中文名`，空字符串视为缺失 |
 | 18 | 编辑器校验顺序 | 先校验照片，再进入保存；`saving` 期间禁用两个保存按钮 |
+| 19 | 抠图缩略图覆盖 | 抠图成功后 `item.thumb` 改成透明底缩略图；`images` 表保留 `original` 与 `cutout` 两份 |
+| 20 | 换图清旧抠图 | `saveItem` 传了新 `original` 但 `cutout` 为空 → 删除 `images(id:cutout)` 且 `hasCutout=false`，避免旧抠图串味 |
+| 21 | 抠图输出格式 | 透明图只能 WebP/PNG；`canvas.toBlob` 返回类型不是 `image/webp` 时必须回退 PNG |
+| 22 | 抠图裁边 | alpha < 12 视为透明；裁到非透明包围盒后四周补 4px，再缩放到最长边 ≤1024 |
+| 23 | 连拍队列响应式 | 队列项必须用 `reactive()` 包装后再 push，否则 `entry.status` 变更不触发视图更新 |
+| 24 | 保存后离页 | 连拍保存成功后置 `saved=true` 再 `replace('/')`，否则会被离开确认拦截 |
+| 25 | 后台队列去重 | `enqueue` 对「正在处理 + 排队中」的 id 去重；空闲时开启新批次要重置计数 |
 
 ---
 
@@ -1547,7 +1787,20 @@ npm run build
 
 ### E2 关键 CSS（非显而易见，需照抄）
 
-**棋盘格底（`thumbsize`）**
+**棋盘格底**
+
+- 全局 `.thumbsize` 仍是 M1 的浅色棋盘格（见下），用于照片尚未加载时的占位。
+- M2 下透明抠图需要深色棋盘格，`ItemCard` 与 `ItemDetailView` 用类名覆盖：
+
+```css
+background:
+  repeating-conic-gradient(
+    color-mix(in srgb, var(--text) 6%, transparent) 0% 25%,
+    transparent 0% 50%
+  ) 0 0 / 22px 22px; /* 卡片用 18px */
+```
+
+**浅色棋盘格（`.thumbsize`）**
 
 ```css
 background-color: #e9eaee;
