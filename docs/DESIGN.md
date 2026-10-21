@@ -1,6 +1,6 @@
 # 衣橱 · Wardrobe — 设计与开发文档
 
-> 版本：v1.6（M3 槽位搭配、叠穿预览、分享长图已实现；含 M2 端上抠图与连续拍摄队列；M4/M5 设计保留；含附录 A–E）
+> 版本：v1.7（M4 今日穿搭、天气、穿着记录已实现；含 M3 槽位搭配、M2 端上抠图与连续拍摄队列；M5 设计保留；含附录 A–E）
 > 目标：仅凭本文档即可从零复刻出功能、数据、交互一致的软件。
 > 文中所有「必须」为复刻一致性要求，「建议」为可替换实现。
 
@@ -116,13 +116,15 @@
 │   │                                   ├─ items（标量 + thumb）                │
 │   │                                   ├─ images（original / cutout）          │
 │   │                                   ├─ outfits / outfitItems（M3）            │
-│   │                                   ├─ wearLogs（M4 预留）                     │
-│   │                                   └─ settings（lastBackupAt 等）          │
+│   │                                   ├─ wearLogs（M4）                          │
+│   │                                   └─ settings（lastBackupAt、天气位置等）    │
 │   ├─ services/image   拍照 → 压缩 → 缩略图 → 主色识别                          │
 │   ├─ services/cutout  M2 端上抠图（WebGPU 优先 / CPU 回退、裁边补边）           │
 │   ├─ services/collage M3 叠穿布局 / 封面合成 / 分享长图                         │
+│   ├─ services/today   M4 日期 / 季节映射 / 候选套装筛选                         │
+│   ├─ services/weather M4 Open-Meteo 天气、城市搜索与缓存                        │
 │   ├─ services/storage 持久化申请 / 用量估算                                    │
-│   └─ services/backup  zip 导出 / 导入（含搭配）                                │
+│   └─ services/backup  zip 导出 / 导入（含搭配与穿着记录）                       │
 │                                                                              │
 └───────────────────────────────┬──────────────────────────────────────────────┘
                                 │ 仅首次加载静态资源（HTTPS）
@@ -161,7 +163,7 @@
 | --- | --- | --- |
 | 衣柜 | `/` | 已实现 |
 | 搭配 | `/outfits` | 已实现（M3） |
-| 今天 | `/today` | 占位页（M4） |
+| 今天 | `/today` | 已实现（M4） |
 | 设置 | `/settings` | 已实现 |
 
 Tab 栏仅在这 4 个路由显示（`route.meta.tab === true`），详情/编辑页不显示，改用顶部返回。
@@ -174,7 +176,7 @@ Tab 栏仅在这 4 个路由显示（`route.meta.tab === true`），详情/编�
 '/outfits/new':    OutfitEditView
 '/outfits/:id':    OutfitDetailView
 '/outfits/:id/edit': OutfitEditView
-'/today':          ComingSoonView    meta.tab = true
+'/today':          TodayView         meta.tab = true，今日穿搭 / 天气 / 穿着记录
 '/settings':       SettingsView      meta.tab = true
 '/capture':        CaptureView       连续拍摄队列（M2）
 '/item/new':       ItemEditView
@@ -266,19 +268,24 @@ OutfitItem:  id, outfitId, itemId, slot:CategoryId, layer:number
 
 槽位复用 `CategoryId`（外套/上装/内搭/下装/鞋/箱包/配饰），`layer` 决定叠穿渲染顺序（数字大在上层）。
 
-### 5.5 `WearLog`（M4 用，表已建）
+### 5.5 `WearLog`（M4 已使用）
 
 ```
 id, date:'YYYY-MM-DD', outfitId?, itemIds:string[],
 occasion?, weather?, rating?:1-5, createdAt
 ```
 
+- `date` 为**本地日期**（`YYYY-MM-DD`），不是 UTC，避免晚上 8 点后被算成第二天。
+- 同一天同一套装只保留一条记录（`date + outfitId` 去重），再次点击只更新场合/天气，不重复累计穿着次数。
+- `itemIds` 存套装内的全部单品，用于单品维度的成本穿着比与「久未穿」统计（M5）。
+
 ### 5.6 `SettingRow`（settings 表，键值）
 
 | key | 类型 | 说明 |
 | --- | --- | --- |
 | `lastBackupAt` | string(ISO) | 上次导出时间，设置页据此提示 |
-| 其他 | unknown | 预留给城市、温度单位等 |
+| `weatherLocation` | `{ name, detail?, latitude, longitude }` | M4 天气城市，仅存本机 |
+| `weatherCache` | `WeatherSnapshot` | M4 上次天气结果，离线时展示 |
 
 ### 5.7 Dexie schema 与索引理由
 
@@ -307,6 +314,7 @@ this.version(1).stores({
 5. `wearCount >= 0`，`price >= 0`。
 6. `colorPrimary` 必须来自 `PALETTE` 的 hex（可由 `nearestPaletteHex` 吸附）。
 7. 删除单品时，同事务删除其所有图片与 `outfitItems` 引用；删除搭配时同事务删除其套内单品。
+8. `wearLogs` 只由「今天穿了」写入；删除搭配/单品不删除历史记录，历史里显示「已删除搭配」或按 `itemIds` 计数。
 8. `outfitItems.slot` 必须等于对应单品的 `category`；同一搭配内同一单品最多出现一次；`layer` 在保存时重新归一化。
 9. 写入 IndexedDB 前必须去掉 Vue reactive Proxy（见 §15.1）。
 
@@ -334,7 +342,7 @@ this.version(1).stores({
 ```
 
 - 只能通过用户显式操作流转（v1 不自动流转）。
-- `markWorn` 的副作用：`wearCount += 1`，`lastWornAt = 今天(YYYY-MM-DD)`，若原为 `clean` 则变 `worn`。
+- `markWorn` 的副作用：`wearCount += 1`，`lastWornAt = 今天(本地 YYYY-MM-DD)`，若原为 `clean` 则变 `worn`。
 - 推荐/筛选中「干净」是可穿的前提（M4 起生效）。
 
 ### 6.3 筛选与搜索（`stores/wardrobe.ts`）
@@ -461,6 +469,7 @@ manifest.json
 items.json
 outfits.json
 outfitItems.json
+wearLogs.json                  （M4 新增；旧备份可能没有）
 settings.json
 README.txt
 thumbs/<itemId>.webp
@@ -476,7 +485,7 @@ covers/<outfitId>.webp          （M3 后可能出现）
   "format": "wardrobe-backup",
   "version": 1,
   "exportedAt": "2026-10-20T01:15:00.000Z",
-  "counts": { "items": 1, "images": 2, "outfits": 1, "outfitItems": 3 }
+  "counts": { "items": 1, "images": 2, "outfits": 1, "outfitItems": 3, "wearLogs": 2 }
 }
 ```
 
@@ -501,11 +510,11 @@ covers/<outfitId>.webp          （M3 后可能出现）
 
 `SettingRow[]`（含 `lastBackupAt`）。
 
-> `outfits.json` 为 `Outfit[]`，移除 `cover` Blob 并记录 `coverFile`；`outfitItems.json` 为 `OutfitItem[]`。
+> `outfits.json` 为 `Outfit[]`，移除 `cover` Blob 并记录 `coverFile`；`outfitItems.json` 为 `OutfitItem[]`；`wearLogs.json` 为 `WearLog[]`。
 
 ### 8.6 导出流程
 
-1. 读 `items`、`images`、`outfits`、`outfitItems`、`settings` 全表。
+1. 读 `items`、`images`、`outfits`、`outfitItems`、`wearLogs`、`settings` 全表。
 2. 逐条把 Blob 转 `Uint8Array`，按 §8.2 的路径放入 map。
 3. `zip(files, { level: 6 })`（异步，避免长时间阻塞）。
 4. `Blob` + `<a download>` 触发下载（ObjectURL 10 秒后回收）。
@@ -521,12 +530,15 @@ unzipSync(ArrayBuffer)
   └─ version > 1 → "备份来自更新的版本，请先升级应用"
 读 items.json / settings.json（缺失 settings 允许）
 读 outfits.json / outfitItems.json（缺失时视为旧版备份，保留本机搭配）
+读 wearLogs.json（缺失时视为旧版备份，保留本机穿着记录）
 逐条校验：id 为 string、category 为 string；数组/对象字段给默认值
 thumb 从 thumbFile 读取并按 itemId 重建 Blob
 images 按 images/<itemId>.<kind>.webp 重建，id = `${itemId}:${kind}`
 cover 从 coverFile 读取并按 outfitId 重建 Blob
+wearLog 校验 id/date/itemIds；缺失字段给默认值
 单个 rw 事务：
   replace → clear items + images；若备份含 outfits.json，同时 clear outfits + outfitItems
+            若备份含 wearLogs.json，同时 clear wearLogs
   merge   → 直接 bulkPut（按主键 upsert）
   settings 不因 replace 清空
 ```
@@ -538,6 +550,7 @@ cover 从 coverFile 读取并按 outfitId 重建 Blob
 - 只增字段不删字段；
 - M3 新增 `outfits.json` / `outfitItems.json` / `covers/` 为可选内容，`version` 保持 1：
   旧版导入会忽略未知文件；新版导入旧备份时保留本机搭配；
+- M4 新增 `wearLogs.json` 为可选内容，同样保持 `version` 1；导入旧备份时保留本机穿着记录；
 - 后续出现破坏性变更时再递增 `version`，导入端对低版本做默认值补齐；
 - 高版本文件拒绝导入并提示升级 App。
 
@@ -693,8 +706,9 @@ npx wrangler pages deploy dist --project-name wardrobe
 | `OutfitPreview` | `pieces, aspectRatio?, emptyText?` | — | 按槽位与 `layer` 用 DOM 绝对定位叠放缩略图，无槽位时显示空态 |
 | `OutfitCard` | `outfit, pieces, count` | — | 搭配列表卡片，优先显示 `cover`，无封面时用 `OutfitPreview` |
 | `SlotPickerSheet` | `open, slot, items, excludeIds, seasons` | `close`, `select(item)` | 底部候选抽屉，默认过滤「干净 · 在役 · 当季」，可切「显示全部」 |
+| `TodayPick` | `outfit, pieces, count, worn, picked` | `wear` | M4 今日候选套装卡片，优先 `cover`，无封面时用 `OutfitPreview` |
 
-图标名：`grid, shirt, sun, gear, plus, camera, photo, back, trash, pencil, search, download, upload, close, check, alert, sparkle, hanger`。
+图标名：`grid, shirt, sun, gear, plus, camera, photo, back, trash, pencil, search, download, upload, close, check, alert, sparkle, hanger, pin, refresh`。
 
 ### 10.4 页面细节
 
@@ -773,9 +787,25 @@ npx wrangler pages deploy dist --project-name wardrobe
 4. 照片与抠图（M2）：已抠图 N / M 件说明 + 队列进度条 + 「重新抠图全部」。
 5. 安装到主屏幕：iOS/Android 操作说明。
 
-#### 占位页 `/today`
+#### 今日 `/today`（M4）
 
-- 图标 + 标题 + 一句说明 + 「计划于 M4 上线」徽标。
+1. 顶部：标题「今天」+ 本地日期（`M月D日 周X`）+ 右上位置按钮。
+2. 天气卡：
+   - 已设置位置：天气 emoji + 温度 + 天气文案 + 刷新按钮；副行显示城市与更新时间和「季节 + 建议保暖级别」。
+   - 未设置位置：提示「按天气挑今天穿什么」+「设置城市」按钮。
+   - 底部弹层设置位置：搜索城市（Open-Meteo Geocoding）、使用当前定位、手动输入经纬度。
+   - 离线或请求失败时显示 `settings.weatherCache` 上次数据，并标注「天气为上次数据」。
+3. 今日记录：当天已记录的套装，显示名称、件数、场合、天气；刚记录的一条高亮。
+4. 场合 chips：不限 / 通勤 / 休闲 / 正式 / 运动 / 约会。
+5. 今天穿什么：候选套装最多 3 套，按收藏 > 评分 > 更新时间排序；每套显示封面/叠穿图、名称、件数与场合，按钮「穿这套」。
+   - 「穿这套」写入 `wearLogs` 并对其所有单品执行 `markWorn`；同一天同一套重复点击只更新场合/天气，不重复累计。
+   - 「随便穿一套」从当前候选里随机高亮一套。
+   - 无候选时提示当前季节/场合筛选条件，给出「看看其他场合」或「去整理搭配」。
+6. 最近穿过：默认最近 6 条历史记录，可展开全部；显示日期、名称、件数、场合、天气，点「查看」进入搭配详情。
+
+筛选规则：套内单品必须存在、`status === 'active'` 且 `cleanState === 'clean'`；季节取 `outfit.seasons`，为空时取套内单品季节并集，仍为空则视为当季通用；选择了场合时要求 `outfit.occasions` 包含该场合。
+
+无天气或未设置城市时，按当前月份推断季节。
 
 ### 10.5 文案规范
 
@@ -817,20 +847,24 @@ wardrobe/
    │  ├─ types.ts            # 全部实体类型
    │  ├─ constants.ts        # 分类/枚举/色板/标签映射
    │  ├─ db.ts               # Dexie 定义与版本
-   │  ├─ repo.ts             # item/image/outfit/setting 读写 + newId/nowIso
+   │  ├─ repo.ts             # item/image/outfit/wearLog/setting 读写 + newId/nowIso
    │  └─ repo.spec.ts
-    ├─ services/
-    │  ├─ image.ts            # 压缩、缩略图、主色、色板吸附
-    │  ├─ image.spec.ts
-    │  ├─ cutout.ts           # M2 抠图：动态 import + WebGPU/CPU + 裁边补边 + 透明 WebP
-    │  ├─ collage.ts          # M3 叠穿布局、封面合成、分享长图 / 系统分享
-    │  ├─ backup.ts           # zip 导出/导入（含 outfits/outfitItems）
-    │  ├─ backup.spec.ts
-    │  └─ storage.ts          # persist / estimate / formatBytes
-    ├─ stores/
-    │  ├─ wardrobe.ts         # 单品状态、筛选、CRUD、toPersistable、attachCutout
-    │  ├─ outfits.ts          # M3 套装 CRUD、套内单品、layer 计算
-    │  └─ cutout.ts           # M2 后台抠图队列（串行、进度、失败计数）
+   ├─ services/
+   │  ├─ image.ts            # 压缩、缩略图、主色、色板吸附
+   │  ├─ image.spec.ts
+   │  ├─ cutout.ts           # M2 抠图：动态 import + WebGPU/CPU + 裁边补边 + 透明 WebP
+   │  ├─ collage.ts          # M3 叠穿布局、封面合成、分享长图 / 系统分享
+   │  ├─ today.ts            # M4 本地日期、季节映射、候选筛选与排序
+   │  ├─ today.spec.ts
+   │  ├─ weather.ts          # M4 Open-Meteo 天气 + 城市搜索 + WMO 文案
+   │  ├─ weather.spec.ts
+   │  ├─ backup.ts           # zip 导出/导入（含 outfits/outfitItems/wearLogs）
+   │  ├─ backup.spec.ts
+   │  └─ storage.ts          # persist / estimate / formatBytes
+   ├─ stores/
+   │  ├─ wardrobe.ts         # 单品状态、筛选、CRUD、toPersistable、attachCutout
+   │  ├─ outfits.ts          # M3 套装 CRUD、套内单品、layer 计算
+   │  └─ cutout.ts           # M2 后台抠图队列（串行、进度、失败计数）
    ├─ composables/
    │  ├─ useObjectUrl.ts     # Blob → ObjectURL，自动回收
    │  └─ useToast.ts         # 模块级单例 Toast
@@ -879,7 +913,7 @@ db 不得 import stores/views
 | 21 | 离线 | 已安装且访问过一次后，断网可打开 app shell |
 | 22 | 移动端适配 | 390×844 下无横向滚动；安全区正确；无 300ms 延迟 |
 
-### 12.2 功能清单（M2 + M3）
+### 12.2 功能清单（M2 + M3 + M4）
 
 | # | 功能 | 验收标准 |
 | --- | --- | --- |
@@ -899,16 +933,26 @@ db 不得 import stores/views
 | 36 | Canvas 封面 | 保存时生成 1080×1440 封面；失败不阻断保存 |
 | 37 | 分享长图 | 生成 1080×1620 图片（预览 + 名称 + 标签 + 单品清单 + 日期）；系统分享优先，降级下载 |
 | 38 | 搭配备份 | 导出/导入包含 `outfits / outfitItems / covers`；旧备份导入保留本机搭配 |
+| 39 | 今日天气 | 可搜索城市 / 定位 / 手输经纬度；显示温度、天气文案、季节与建议保暖级别；离线显示上次缓存 |
+| 40 | 候选套装 | 按「季节 ∩ 场合 ∩ 全部单品干净且在役」过滤，最多 3 套，收藏/评分优先 |
+| 41 | 随便穿一套 | 从当前候选中随机高亮一套 |
+| 42 | 记录穿着 | 点「穿这套」写入 `wearLogs`，套内单品 `wearCount+1`、`lastWornAt=今天`、`clean` 变 `worn` |
+| 43 | 同日去重 | 同一天同一套装重复记录只覆盖，不重复累计穿着次数；同一天可记录多套 |
+| 44 | 今日记录 | 当天记录置顶显示，刚记录的一条高亮 |
+| 45 | 穿着历史 | 最近 6 条历史可展开全部，显示日期、名称、件数、场合、天气，可进入搭配详情 |
+| 46 | 未设置天气降级 | 未设置城市时按当前月份推断季节；无网络仍可手动选择并记录 |
+| 47 | 穿着记录备份 | 导出/导入包含 `wearLogs.json`；旧备份导入保留本机穿着记录 |
 
 ### 12.3 当前验证状态
 
 ```
 npm run typecheck   ✔ 通过
-npm test            ✔ 3 文件 / 14 用例通过
-npm run build       ✔ 通过，PWA precache 45 项
+npm test            ✔ 5 文件 / 31 用例通过
+npm run build       ✔ 通过，PWA precache 44 项
 Playwright 冒烟     ✔ 录入→详情→网格→导出备份，0 控制台错误
 Playwright M2 E2E   ✔ 连拍上传→分类保存→后台抠图→衣柜透明底→详情切换
 Playwright M3 E2E   ✔ 7 槽位选衣（配饰多件）→ 保存生成封面 → 详情/分享下载 → 收藏 → 编辑移除 → 列表封面，0 控制台错误
+Playwright M4 E2E   ✔ 手动设置城市 → 天气渲染（模拟 Open-Meteo）→ 候选套装 → 穿这套写入穿着记录、单品转 worn → 备份含 wearLogs.json，0 控制台错误（截图见 docs/screenshots/m4）
 抠图实测（无头）     ✔ 冷启动 71s（含 88MB 模型下载）；热启动 9.9s（单线程回退）
 ```
 
@@ -919,10 +963,11 @@ Playwright M3 E2E   ✔ 7 槽位选衣（配饰多件）→ 保存生成封面 �
 | M1 | 录入 / 详情 / 筛选搜索 / 统计 / 备份 / PWA | ✅ 已实现并上线（`https://wardrobe-eec.pages.dev`） |
 | M2 | 端上抠图（`@imgly/background-removal`）+ 连续拍摄队列 | ✅ 已实现并上线（commit `08639f4`） |
 | M3 | 槽位搭配、叠穿预览、分享长图 | ✅ 已实现（M3） |
-| M4 | 今天 + 穿着记录 + 天气 | ⏳ 设计完成（§14.3），未开发 |
+| M4 | 今天 + 天气 + 穿着记录 | ✅ 已实现（M4） |
 | M5 | 规则推荐 + 统计 | ⏳ 设计完成（§14.4），未开发 |
 
-**下一步建议**：M4 今日页与穿着记录；先补 `wearLogs` 的备份导出/导入（§14.3）。
+**下一步建议**：M5 规则评分与统计页（成本穿着比、久未穿、闲置提醒）。
+M4 小改进：§15.2 第 9/10 条（清除天气位置、跨午夜日期刷新）。
 顺手可修：§6.3 / §15.2 第 1 条的搜索中文标签缺陷。
 
 ---
@@ -960,9 +1005,11 @@ globalThis.Blob = NodeBlob as unknown as typeof Blob
 
 | 文件 | 用例 |
 | --- | --- |
-| `db/repo.spec.ts` | 单品/图片读写与级联删除；套装与套内单品 CRUD、整体替换、删除单品时清理套装引用 |
-| `services/backup.spec.ts` | 导出→清库→导入完整还原（含 thumb、原图、套装、套内单品与封面）；merge 幂等；replace 清理旧搭配；非法文件报错 |
+| `db/repo.spec.ts` | 单品/图片读写与级联删除；套装与套内单品 CRUD、整体替换、删除单品时清理套装引用；穿着记录写入、同日同套去重不重复累计、同日多套并存 |
+| `services/backup.spec.ts` | 导出→清库→导入完整还原（含 thumb、原图、套装、套内单品、封面与穿着记录）；merge 幂等；replace 清理旧搭配与穿着记录；旧备份不含 `wearLogs.json` 时保留本机穿着记录；非法文件报错 |
 | `services/image.spec.ts` | 色板精确命中；越界颜色吸附到最近项 |
+| `services/today.spec.ts` | 本地日期 key 与今日标题；温度→季节与保暖级别；今天/昨天/跨年日期标签；套装季节回退、在役/干净/季节/场合过滤与收藏/评分排序；空季节套装视为通用 |
+| `services/weather.spec.ts` | WMO 天气码中文文案与 emoji（晴/多云/雾/雨雪/雷阵雨）；未知天气码回退「天气未知」 |
 
 ### 13.4 每个用例的 beforeEach
 
@@ -1097,19 +1144,25 @@ await db.open()
    `views/OutfitEditView.vue`、`views/OutfitDetailView.vue`。
 7. **页面刷新**：hash 路由切换不会重建 Pinia，搭配页面进入时 `wardrobe.load(true)` /
    `outfits.load(true)`，避免单品删除或导入后仍用旧缓存。
-8. **明确不做**：自由拖拽排版、自动推荐组合（M5）、穿着记录写入（M4）。
+8. **明确不做**：自由拖拽排版、自动推荐组合（M5）。
 
 ---
 
-### 14.3 M4 — 今天 + 穿着记录（已设计，未开发）
+### 14.3 M4 — 今天 + 天气 + 穿着记录（已实现）
+
+> 状态：已实现。天气走 Open-Meteo（免 Key），城市可搜索、定位或手输坐标；离线缓存上次结果；未设置城市时按当前月份推断季节。
 
 **目标**：把「看衣柜」变成「决定穿什么」。
 
-**天气（可选但建议）**
+**天气**
 
-- 使用 Open-Meteo（免 Key）：`https://api.open-meteo.com/v1/forecast?latitude=&longitude=&current=temperature_2m,weather_code`。
-- 城市经纬度存 `settings`，首次使用时让用户选择或手动输入。
-- 离线时使用上次缓存并标注「天气为上次数据」。
+- 使用 Open-Meteo（免 Key）：
+  - 天气：`https://api.open-meteo.com/v1/forecast?latitude=&longitude=&current=temperature_2m,weather_code&timezone=auto&forecast_days=1`
+  - 城市搜索：`https://geocoding-api.open-meteo.com/v1/search?name=&count=6&language=zh&format=json`
+- 城市存 `settings.weatherLocation = { name, detail?, latitude, longitude }`；天气结果存 `settings.weatherCache`。
+- 设置入口是今日页右上角的位置按钮，打开底部弹层：搜索城市 / 使用当前定位 / 手动输入经纬度；位置只存本机。
+- 离线或请求失败时使用上次缓存并标注「天气为上次数据」；没有缓存时按月份推断季节，仍可手动记录。
+- WMO 天气码映射中文文案与 emoji（`services/weather.ts` 的 `describeWeather`）。
 
 **温度 → 季节映射**
 
@@ -1122,22 +1175,42 @@ await db.open()
 
 **今日页结构**
 
-1. 顶部：日期 + 天气 + 温度。
-2. 场合 chips：通勤 / 休闲 / 正式 / 运动 / 约会。
-3. 候选套装：按「季节 ∩ 场合 ∩ 全部单品干净」过滤，最多 3 套。
-4. 「随便穿一套」：从候选中随机。
-5. 「今天穿了」：写入 `wear_log`，并对其所有单品执行 `markWorn`。
+1. 顶部：本地日期 + 天气卡（城市、温度、天气、更新时间、刷新）。
+2. 今日记录：当天已记录套装，刚记录的高亮。
+3. 场合 chips：不限 / 通勤 / 休闲 / 正式 / 运动 / 约会。
+4. 候选套装：按「季节 ∩ 场合 ∩ 全部单品干净且在役」过滤，最多 3 套，按收藏 > 评分 > 更新时间排序。
+5. 「随便穿一套」：从当前 3 套候选中随机高亮。
+6. 「穿这套」：写入 `wearLogs`，并对其所有单品执行 `markWorn`。
+7. 最近穿过：默认最近 6 条历史，可展开全部。
+
+**候选筛选规则（`services/today.ts`）**
+
+- 套内单品必须存在、`status === 'active'`、`cleanState === 'clean'`。
+- 季节取 `outfit.seasons`；为空时取套内单品 `seasons` 并集；仍为空视为当季通用。
+- 选择了场合时要求 `outfit.occasions` 包含该场合；未选择时不限。
+- 无天气或未设置位置时，`seasonsForTemperature(undefined)` 回退到当前月份季节。
 
 **穿着记录规则**
 
-- 同一天同一套装重复记录 → 覆盖而非新增（以 `date + outfitId` 去重）。
-- 单品维度的记录用于成本穿着比与「久未穿」统计。
+- 同一天同一套装重复记录 → 覆盖而非新增（以 `date + outfitId` 去重），只更新场合/天气。
+- 首次记录才累计单品 `wearCount`，避免重复点击把次数刷高。
+- 同一天可记录多套搭配（如白天通勤 + 晚上约会）。
+- `date` 用本地日期 `YYYY-MM-DD`；单品维度的记录用于成本穿着比与「久未穿」统计（M5）。
+
+**实现文件**
+
+- `services/today.ts` / `today.spec.ts`：日期、季节、筛选、排序。
+- `services/weather.ts` / `weather.spec.ts`：天气、城市搜索、WMO 文案。
+- `components/TodayPick.vue`、`views/TodayView.vue`：今日页与天气设置弹层。
+- `db/repo.ts`：`listWearLogs / recordOutfitWear`；`stores/wardrobe.ts`：`markWorn` 改用本地日期。
+- `services/backup.ts`：`wearLogs.json` 可选导出/导入。
 
 **验收**
 
 - 选场合后 1 秒内给出候选。
-- 一键记录后，单品穿着次数与清洁状态同步更新。
-- 无网络时仍可手动选择并记录。
+- 一键记录后，单品穿着次数与清洁状态同步更新，重复点击不重复累计。
+- 无网络或未设置城市时仍可手动选择并记录。
+- 旧备份（无 `wearLogs.json`）导入时不清空本机穿着记录。
 
 ---
 
@@ -1196,6 +1269,24 @@ for slot in [上装, 下装, 鞋]:
 
 - 修复：路由 `scrollBehavior` 返回 `{ top: 0 }`。
 
+**「今天穿了」日期跨天**
+
+- 现象：晚上记录穿着，`lastWornAt` 变成第二天。
+- 原因：`toISOString().slice(0, 10)` 取的是 UTC 日期。
+- 修复：`services/today.ts` 的 `localDateKey()` 用本地 `getFullYear/getMonth/getDate` 拼接；`markWorn` 与穿着记录统一使用它。
+
+**WMO 天气码误判**
+
+- 现象：未知天气码（如 123）被显示成「雷阵雨」。
+- 原因：只判断了 `code >= 95`，没有上限。
+- 修复：`code >= 95 && code <= 99` 才映射雷阵雨，其余回退「天气未知」。
+
+**Dexie 多表事务的 TS 重载上限**
+
+- 现象：`db.transaction('rw', a, b, c, d, e, f, fn)` 报 “Expected 3-7 arguments”。
+- 原因：Dexie 5 的表参数重载最多 5 张表，第 6 张起需要数组形式。
+- 修复：`db.transaction('rw', [db.items, db.images, db.outfits, db.outfitItems, db.wearLogs, db.settings], fn)`。
+
 ### 15.2 现存缺陷
 
 | # | 问题 | 影响 | 建议修复 |
@@ -1208,6 +1299,8 @@ for slot in [上装, 下装, 鞋]:
 | 6 | 使用 `window.confirm` | 视觉与系统不一致 | 自定义底部确认弹层 |
 | 7 | 全部单品常驻内存 | 数千件时列表卡顿 | 分页 + 虚拟滚动 |
 | 8 | 图片详情每次从 Blob 解码 | 首次打开有轻微延迟 | 缓存解码后的 ImageBitmap |
+| 9 | 天气位置只能更换，不能清除 | 想回到「未设置」状态只能改选别的城市 | 天气设置弹层加「清除位置」，同时清 `settings.weatherLocation` 与 `settings.weatherCache` |
+| 10 | 页面跨过午夜后日期不自动翻页 | 应用长时间停留在今日页时，`TODAY` 仍是昨天，记录会写到旧日期 | 监听 `visibilitychange` 或定时器，日期变化后重算 `TODAY`、刷新今日记录与候选 |
 
 ### 15.3 平台风险
 
@@ -1268,9 +1361,10 @@ npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
 1. `db/types.ts` — 按 §5 定义全部接口。
 2. `db/constants.ts` — 按 §17 写死全部枚举与色板。
 3. `db/db.ts` — Dexie 类 + §5.7 的索引。
-4. `db/repo.ts` — `newId / nowIso / imageKey / listItems / getItem / putItem / putImage / getImage / listImages / deleteItem / listOutfits / getOutfit / putOutfit / listOutfitItems / replaceOutfitItems / deleteOutfit / getSetting / setSetting / countItems`。
+4. `db/repo.ts` — `newId / nowIso / imageKey / listItems / getItem / putItem / putImage / getImage / listImages / deleteItem / listOutfits / getOutfit / putOutfit / listOutfitItems / replaceOutfitItems / deleteOutfit / listWearLogs / recordOutfitWear / getSetting / setSetting / countItems`。
    - `newId` 必须有 `crypto.randomUUID` 不可用时的降级。
    - `deleteItem` 同事务清理 `images` 与 `outfitItems`。
+   - `recordOutfitWear` 在单个事务内按 `date + outfitId` 去重，并更新套内单品的穿着次数与清洁状态。
 
 验收：`repo.spec.ts` 的全部用例通过（含套装 CRUD 与级联）。
 
@@ -1281,10 +1375,12 @@ npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
    - 动态 `import('@imgly/background-removal')`；先试 `device:'gpu'`，失败回退 `'cpu'`。
    - 裁透明边 + 补 4px；输出 WebP(alpha)，回退 PNG。
 3. `services/storage.ts` 实现 `requestPersistentStorage / isStoragePersistent / storageEstimate / formatBytes`。
-4. `services/backup.ts` 按 §8 实现，导出 `buildBackup / backupFileName / downloadBlob / importBackup`；包含 `outfits / outfitItems / covers`。
+4. `services/backup.ts` 按 §8 实现，导出 `buildBackup / backupFileName / downloadBlob / importBackup`；包含 `outfits / outfitItems / covers / wearLogs`。
 5. `services/collage.ts` 实现 `pieceLayout / renderOutfitCover / buildOutfitShareImage / shareOutfitImage`。
    - `pieceLayout` 同时供 Canvas 与 `OutfitPreview.vue` 使用，槽位布局不得散落两处。
    - 封面 1080×1440；分享图 1080×1620；优先 `navigator.share({files})`，不可用则下载。
+6. `services/today.ts` 实现 `localDateKey / todayHeading / seasonForDate / seasonsForTemperature / warmthRange / effectiveSeasons / isOutfitEligible / rankOutfits`（纯函数，便于单测）。
+7. `services/weather.ts` 实现 `describeWeather / fetchWeather / searchPlaces / currentPosition`；请求带 8s 超时，结果写 `settings.weatherCache`。
 
 验收：`npm test` 全绿（含备份往返）；无头 Chromium 能对一张图跑通 `createCutout`。
 
@@ -1294,6 +1390,7 @@ npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
    - state：`items / loaded / loading / search / category / clean`
    - getters：`total / filtered / countByCategory / categoryStats / totalValue / wearCountTotal`
    - actions：`load / saveItem / attachCutout / removeItem / markWorn / setCleanState`
+   - `markWorn` 的日期用本地 `YYYY-MM-DD`（不能用 `toISOString()`，否则晚上会被算成第二天）
    - `saveItem` 接受 `{ item, original?, cutout?, cutoutThumb? }`；换新原图但无新抠图时必须删旧 `cutout` 并置 `hasCutout=false`
    - **`toPersistable` 必须存在**（§15.1）
 2. `stores/cutout.ts` — 后台抠图队列：`enqueue(ids, resetWhenIdle?)`、`running/total/done/failed/percent`；串行执行，失败只计数不中断。
@@ -1324,13 +1421,14 @@ npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
 
 1. `router/index.ts` 按 §4.2，含 `scrollBehavior`。
 2. `App.vue`：`router-view` + 条件 `AppTabBar`（`route.meta.tab`）+ `CutoutIndicator` + `ToastHost`。
-3. 依次实现 `WardrobeView`、`ItemEditView`、`ItemDetailView`、`CaptureView`、`OutfitsView`、`OutfitEditView`、`OutfitDetailView`、`SettingsView`、`ComingSoonView`，细节按 §10.4。
+3. 依次实现 `WardrobeView`、`ItemEditView`、`ItemDetailView`、`CaptureView`、`OutfitsView`、`OutfitEditView`、`OutfitDetailView`、`TodayView`、`SettingsView`，细节按 §10.4。
 4. `ItemEditView`：选图后先出预览再后台抠图；保存前若抠图未完成要 `await`，失败则按「无抠图」保存。
 5. `CaptureView`：`reactive` 创建队列项（否则直接改目标对象不触发渲染），保存后 `cutout.enqueue(ids, true)` 再 `router.replace('/')`。
 6. `OutfitEditView`：保存后 `renderOutfitCover`，封面失败只 Toast 不阻断；`OutfitDetailView` 分享失败回退下载。
 7. 搭配相关页面加载时必须强制刷新 wardrobe/outfits store，避免从单品页返回后引用被删除的单品。
+8. `TodayView`：进入时读 `settings.weatherLocation / weatherCache`；设置天气后刷新；「穿这套」调用 `recordOutfitWear` 后刷新本地候选与历史；`markWorn` 用本地日期。
 
-验收：走通 §12.1 的 22 条、§12.2 的 16 条。
+验收：走通 §12.1 的 22 条、§12.2 的 25 条。
 
 ### 步骤 9：PWA 资源
 
@@ -1628,20 +1726,36 @@ npm run build
 | 字段 | 导入方式 → 合并（保留现有）/ 覆盖（清空后导入） |
 | 确认框 | 将「{文件名}」导入（{覆盖现有数据 \| 与现有数据合并}），继续？ |
 | Toast | 已导出 {size} / 导出失败，请重试 |
-| Toast | 导入完成：{n} 件单品、{m} 套搭配 / 导入失败 |
+| Toast | 导入完成：{n} 件单品，{m} 套搭配，{k} 条穿着记录（为 0 的段省略）/ 导入失败 |
 | 存储 | 已用 {size} / 可用配额 {size} |
 | 持久化 | 已开启持久化存储 / 未开启持久化，系统可能清理数据 |
 | 按钮 | 申请持久化存储 |
 | Toast | 已开启持久化存储 / 浏览器未授予，建议定期导出备份 |
 | 安装说明 | iPhone：Safari → 分享 → 添加到主屏幕。<br>Android：Chrome → 菜单 → 安装应用。<br>从主屏图标打开可获得独立窗口和更稳定的本地存储。 |
 
-### A8 占位页（`ComingSoonView`）
+### A8 今日（`TodayView`）
 
-| 路由 | 标题 | 说明 | 徽标 |
-| --- | --- | --- | --- |
-| `/today` | 今天 | 按天气和场合挑一套，一键记录穿着。 | 计划于 M4 上线 |
-
-通用句式：`{标题}功能还在开发中`。
+| 位置 | 文案 |
+| --- | --- |
+| 标题 | 今天 |
+| 天气卡（无位置） | 按天气挑今天穿什么 / 设置城市后可按温度和季节筛选干净、在役的搭配。 / 设置城市 |
+| 天气卡（有位置） | {天气文案} / {温度}° / {城市} {时间} 更新 / 建议保暖 {min}–{max} 级 · {保暖建议} |
+| 天气卡（离线） | 天气为上次数据，联网后自动更新 |
+| Toast | 天气更新失败，显示上次数据 / 天气获取失败，请稍后重试 |
+| 区块 | 今日记录 / 今天什么场合 / 今天穿什么 / 最近穿过 |
+| 场合 | 不限 / 通勤 / 休闲 / 正式 / 运动 / 约会（右上「清除」） |
+| 候选提示 | {n} 套可选 |
+| 空态（无搭配） | 还没有搭配 / 先把常穿的单品拼成套装，今天页就能直接挑。 / 新建搭配 |
+| 空态（无候选） | 没有符合条件的套装 / 当前按「{季节}{ · 场合}」筛选，需要套装内单品都干净、在役，季节也要匹配。 / 看看其他场合 / 去整理搭配 |
+| 操作 | 随便穿一套 / 穿这套 |
+| Toast | 试试「{名称}」/ 这套搭配还没有单品 / 已记录今天穿了「{名称}」/ 今天已经记录过这套 / 记录失败，请重试 |
+| 历史行 | {日期} · {件数} 件{ · 场合}{ · 天气} / 查看 |
+| 历史兜底 | 已删除搭配 / {n} 件单品 |
+| 展开 | 查看全部 / 收起 |
+| 天气设置弹层标题 | 设置天气位置 |
+| 天气设置说明 | 位置只保存在本机，用于按当地天气筛选套装。天气数据来自 Open-Meteo，无需注册。 |
+| 天气设置字段 | 搜索城市（占位：搜索城市，如 杭州）/ 搜索 / 搜索中 / 使用当前位置 / 定位中 / 手动输入经纬度 / 位置名称（可选）/ 纬度 / 经度 / 使用这组坐标 |
+| 天气设置错误 | 没有找到这个城市，试试更完整的名称 / 搜索失败，请检查网络 / 请输入有效的纬度（-90~90）和经度（-180~180）/ 定位失败，请手动选择城市 |
 
 ### A9 备份模块错误文案
 
@@ -1684,6 +1798,8 @@ npm run build
 | `alert` | `M12 8.5v5`、`M12 16.8h.01`、`M12 3.5l9 16H3z` |
 | `sparkle` | `M12 3.5l1.7 5L19 10l-5.3 1.5L12 16.5l-1.7-5L5 10l5.3-1.5z` |
 | `hanger` | `M12 6.5a2 2 0 100-4 2 2 0 000 4z`、`M12 6.5v3l8 5.5H4z` |
+| `pin` | `M12 21s6-5.2 6-11a6 6 0 10-12 0c0 5.8 6 11 6 11z`、`M12 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z` |
+| `refresh` | `M4.5 12a7.5 7.5 0 0112.6-5.5`、`M20 4.5v6h-6`、`M19.5 12a7.5 7.5 0 01-12.6 5.5`、`M4 19.5v-6h6` |
 
 旋转类：`.spin { animation: spin .9s linear infinite } @keyframes spin { to { transform: rotate(360deg) } }`。
 

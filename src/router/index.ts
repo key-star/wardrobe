@@ -33,7 +33,7 @@ export const router = createRouter({
     {
       path: '/today',
       name: 'today',
-      component: () => import('@/views/ComingSoonView.vue'),
+      component: () => import('@/views/TodayView.vue'),
       meta: { tab: true },
     },
     {

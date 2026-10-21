@@ -120,7 +120,9 @@ async function onFile(event: Event) {
     await store.load(true)
     await refresh()
     show(
-      `导入完成：${result.items} 件单品${result.outfits ? `、${result.outfits} 套搭配` : ''}`,
+      `导入完成：${result.items} 件单品${result.outfits ? `，${result.outfits} 套搭配` : ''}${
+        result.wearLogs ? `，${result.wearLogs} 条穿着记录` : ''
+      }`,
     )
   } catch (error) {
     show(error instanceof Error ? error.message : '导入失败')

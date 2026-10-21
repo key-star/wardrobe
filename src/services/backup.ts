@@ -1,7 +1,14 @@
 import { strFromU8, strToU8, unzipSync, zip } from 'fflate'
 import { db } from '@/db/db'
 import { imageKey } from '@/db/repo'
-import type { ImageKind, Item, Outfit, OutfitItem, SettingRow } from '@/db/types'
+import type {
+  ImageKind,
+  Item,
+  Outfit,
+  OutfitItem,
+  SettingRow,
+  WearLog,
+} from '@/db/types'
 
 export const BACKUP_FORMAT = 'wardrobe-backup'
 export const BACKUP_VERSION = 1
@@ -15,6 +22,7 @@ export interface BackupManifest {
     images: number
     outfits?: number
     outfitItems?: number
+    wearLogs?: number
   }
 }
 
@@ -44,6 +52,7 @@ export async function buildBackup(): Promise<Blob> {
   const images = await db.images.toArray()
   const outfits = await db.outfits.toArray()
   const outfitItems = await db.outfitItems.toArray()
+  const wearLogs = await db.wearLogs.toArray()
   const settings = await db.settings.toArray()
 
   const files: Record<string, Uint8Array> = {}
@@ -85,6 +94,7 @@ export async function buildBackup(): Promise<Blob> {
       images: images.length,
       outfits: outfits.length,
       outfitItems: outfitItems.length,
+      wearLogs: wearLogs.length,
     },
   }
 
@@ -92,6 +102,7 @@ export async function buildBackup(): Promise<Blob> {
   files['items.json'] = strToU8(JSON.stringify(manifestItems))
   files['outfits.json'] = strToU8(JSON.stringify(manifestOutfits))
   files['outfitItems.json'] = strToU8(JSON.stringify(outfitItems))
+  files['wearLogs.json'] = strToU8(JSON.stringify(wearLogs))
   files['settings.json'] = strToU8(JSON.stringify(settings))
   files['README.txt'] = strToU8(
     '这是「衣橱」的备份文件。请勿解压修改。在新设备上用「导入备份」即可恢复。\n',
@@ -123,6 +134,7 @@ export interface ImportResult {
   images: number
   outfits: number
   outfitItems: number
+  wearLogs: number
   mode: ImportMode
 }
 
@@ -159,6 +171,9 @@ export async function importBackup(
   const rawOutfitItems = files['outfitItems.json']
     ? parseJson<OutfitItem[]>(files, 'outfitItems.json')
     : []
+  const rawWearLogs = files['wearLogs.json']
+    ? parseJson<WearLog[]>(files, 'wearLogs.json')
+    : []
   const settings = files['settings.json']
     ? parseJson<SettingRow[]>(files, 'settings.json')
     : []
@@ -167,6 +182,7 @@ export async function importBackup(
   const images: { id: string; itemId: string; kind: ImageKind; blob: Blob }[] = []
   const outfits: Outfit[] = []
   const outfitItems: OutfitItem[] = []
+  const wearLogs: WearLog[] = []
 
   for (const raw of rawItems) {
     if (!raw || typeof raw.id !== 'string' || typeof raw.category !== 'string') continue
@@ -239,15 +255,40 @@ export async function importBackup(
     })
   }
 
+  for (const raw of rawWearLogs) {
+    if (
+      !raw ||
+      typeof raw.id !== 'string' ||
+      typeof raw.date !== 'string' ||
+      !Array.isArray(raw.itemIds)
+    ) {
+      continue
+    }
+    wearLogs.push({
+      id: raw.id,
+      date: raw.date,
+      outfitId: typeof raw.outfitId === 'string' ? raw.outfitId : undefined,
+      itemIds: raw.itemIds.filter((id): id is string => typeof id === 'string'),
+      occasion: typeof raw.occasion === 'string' ? raw.occasion : undefined,
+      weather: typeof raw.weather === 'string' ? raw.weather : undefined,
+      rating: typeof raw.rating === 'number' ? raw.rating : undefined,
+      createdAt: raw.createdAt ?? new Date().toISOString(),
+    })
+  }
+
   const hasOutfitData = Boolean(files['outfits.json'])
+  const hasWearLogData = Boolean(files['wearLogs.json'])
 
   await db.transaction(
     'rw',
-    db.items,
-    db.images,
-    db.outfits,
-    db.outfitItems,
-    db.settings,
+    [
+      db.items,
+      db.images,
+      db.outfits,
+      db.outfitItems,
+      db.wearLogs,
+      db.settings,
+    ],
     async () => {
       if (mode === 'replace') {
         await db.items.clear()
@@ -256,11 +297,15 @@ export async function importBackup(
           await db.outfits.clear()
           await db.outfitItems.clear()
         }
+        if (hasWearLogData) {
+          await db.wearLogs.clear()
+        }
       }
       await db.items.bulkPut(items)
       await db.images.bulkPut(images)
       if (outfits.length) await db.outfits.bulkPut(outfits)
       if (outfitItems.length) await db.outfitItems.bulkPut(outfitItems)
+      if (wearLogs.length) await db.wearLogs.bulkPut(wearLogs)
       if (settings.length) await db.settings.bulkPut(settings)
     },
   )
@@ -270,6 +315,7 @@ export async function importBackup(
     images: images.length,
     outfits: outfits.length,
     outfitItems: outfitItems.length,
+    wearLogs: wearLogs.length,
     mode,
   }
 }

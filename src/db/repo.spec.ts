@@ -9,9 +9,11 @@ import {
   listItems,
   listOutfitItems,
   listOutfits,
+  listWearLogs,
   putImage,
   putItem,
   putOutfit,
+  recordOutfitWear,
   replaceOutfitItems,
 } from '@/db/repo'
 import type { OutfitItem } from '@/db/types'
@@ -120,5 +122,98 @@ describe('outfit repository', () => {
 
     expect(await getOutfit(outfit.id)).toBeUndefined()
     expect(await listOutfitItems(outfit.id)).toHaveLength(0)
+  })
+})
+
+describe('wear log repository', () => {
+  async function seedOutfit() {
+    const outfit = createEmptyOutfit()
+    await putOutfit(outfit)
+    const top = createEmptyItem('top')
+    const bottom = createEmptyItem('bottom')
+    await putItem(top)
+    await putItem(bottom)
+    await replaceOutfitItems(outfit.id, [
+      { id: 'p1', outfitId: outfit.id, itemId: top.id, slot: 'top', layer: 20 },
+      { id: 'p2', outfitId: outfit.id, itemId: bottom.id, slot: 'bottom', layer: 40 },
+    ])
+    return { outfit, top, bottom }
+  }
+
+  it('records a wear log and marks its items worn', async () => {
+    const { outfit, top, bottom } = await seedOutfit()
+
+    const result = await recordOutfitWear({
+      date: '2026-10-22',
+      outfitId: outfit.id,
+      itemIds: [top.id, bottom.id],
+      occasion: 'commute',
+      weather: '22° 晴',
+    })
+
+    expect(result.created).toBe(true)
+    expect(result.log).toMatchObject({
+      date: '2026-10-22',
+      outfitId: outfit.id,
+      occasion: 'commute',
+      weather: '22° 晴',
+    })
+
+    const updatedTop = await getItem(top.id)
+    const updatedBottom = await getItem(bottom.id)
+    expect(updatedTop).toMatchObject({
+      wearCount: 1,
+      lastWornAt: '2026-10-22',
+      cleanState: 'worn',
+    })
+    expect(updatedBottom?.wearCount).toBe(1)
+  })
+
+  it('updates the same outfit record instead of logging twice', async () => {
+    const { outfit, top, bottom } = await seedOutfit()
+
+    await recordOutfitWear({
+      date: '2026-10-22',
+      outfitId: outfit.id,
+      itemIds: [top.id, bottom.id],
+      occasion: 'commute',
+    })
+    const second = await recordOutfitWear({
+      date: '2026-10-22',
+      outfitId: outfit.id,
+      itemIds: [top.id, bottom.id],
+      occasion: 'date',
+    })
+
+    expect(second.created).toBe(false)
+    expect(await listWearLogs()).toHaveLength(1)
+    expect(second.log.occasion).toBe('date')
+    expect((await getItem(top.id))?.wearCount).toBe(1)
+  })
+
+  it('keeps multiple outfits on the same day and sorts by date', async () => {
+    const { outfit, top, bottom } = await seedOutfit()
+    const other = createEmptyOutfit()
+    await putOutfit(other)
+
+    await recordOutfitWear({
+      date: '2026-10-22',
+      outfitId: outfit.id,
+      itemIds: [top.id, bottom.id],
+    })
+    await recordOutfitWear({
+      date: '2026-10-22',
+      outfitId: other.id,
+      itemIds: [top.id],
+    })
+    await recordOutfitWear({
+      date: '2026-10-21',
+      outfitId: outfit.id,
+      itemIds: [top.id],
+    })
+
+    const logs = await listWearLogs()
+    expect(logs).toHaveLength(3)
+    expect(logs.map((log) => log.date)).toEqual(['2026-10-22', '2026-10-22', '2026-10-21'])
   })
 })

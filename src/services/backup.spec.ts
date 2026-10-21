@@ -1,3 +1,4 @@
+import { unzipSync, zip } from 'fflate'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { db } from '@/db/db'
 import {
@@ -5,9 +6,11 @@ import {
   getItem,
   getOutfit,
   listOutfitItems,
+  listWearLogs,
   putImage,
   putItem,
   putOutfit,
+  recordOutfitWear,
   replaceOutfitItems,
 } from '@/db/repo'
 import type { OutfitItem } from '@/db/types'
@@ -33,6 +36,15 @@ async function seed() {
     new Blob([new Uint8Array([4, 5, 6])], { type: 'image/webp' }),
   )
   return item
+}
+
+function rezip(files: Record<string, Uint8Array>): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    zip(files, { level: 6 }, (err, data) => {
+      if (err) reject(err)
+      else resolve(new Blob([data as BlobPart], { type: 'application/zip' }))
+    })
+  })
 }
 
 describe('backup', () => {
@@ -126,6 +138,87 @@ describe('backup', () => {
 
     expect(await db.outfits.count()).toBe(1)
     expect((await db.outfits.toArray())[0].name).toBe('备份里的搭配')
+  })
+
+  it('round-trips wear logs', async () => {
+    const item = await seed()
+    const outfit = createEmptyOutfit()
+    outfit.name = '通勤周一'
+    await putOutfit(outfit)
+    await recordOutfitWear({
+      date: '2026-10-22',
+      outfitId: outfit.id,
+      itemIds: [item.id],
+      occasion: 'commute',
+      weather: '22° 晴',
+    })
+
+    const backup = await buildBackup()
+    await db.delete()
+    await db.open()
+
+    const result = await importBackup(backup, 'replace')
+    expect(result.wearLogs).toBe(1)
+
+    const logs = await listWearLogs()
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatchObject({
+      date: '2026-10-22',
+      outfitId: outfit.id,
+      occasion: 'commute',
+      weather: '22° 晴',
+      itemIds: [item.id],
+    })
+  })
+
+  it('replace mode clears existing wear logs when the backup has them', async () => {
+    const item = await seed()
+    const outfit = createEmptyOutfit()
+    await putOutfit(outfit)
+    await recordOutfitWear({
+      date: '2026-10-21',
+      outfitId: outfit.id,
+      itemIds: [item.id],
+    })
+    const backup = await buildBackup()
+
+    await recordOutfitWear({
+      date: '2026-10-22',
+      outfitId: outfit.id,
+      itemIds: [item.id],
+    })
+
+    await importBackup(backup, 'replace')
+
+    const logs = await listWearLogs()
+    expect(logs).toHaveLength(1)
+    expect(logs[0].date).toBe('2026-10-21')
+  })
+
+  it('keeps wear logs when importing a backup made before the feature', async () => {
+    const item = await seed()
+    const outfit = createEmptyOutfit()
+    await putOutfit(outfit)
+    await recordOutfitWear({
+      date: '2026-10-21',
+      outfitId: outfit.id,
+      itemIds: [item.id],
+    })
+    const backup = await buildBackup()
+
+    const files = unzipSync(new Uint8Array(await backup.arrayBuffer()))
+    delete files['wearLogs.json']
+    const legacy = await rezip(files)
+
+    await recordOutfitWear({
+      date: '2026-10-22',
+      outfitId: outfit.id,
+      itemIds: [item.id],
+    })
+
+    await importBackup(legacy, 'replace')
+
+    expect(await listWearLogs()).toHaveLength(2)
   })
 
   it('rejects files that are not wardrobe backups', async () => {

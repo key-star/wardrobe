@@ -11,6 +11,7 @@ import {
   putImage,
   putItem,
 } from '@/db/repo'
+import { localDateKey } from '@/services/today'
 
 export function createEmptyItem(category: CategoryId = 'top'): Item {
   const ts = nowIso()
@@ -177,7 +178,7 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
     const item = byId(id)
     if (!item) return
     item.wearCount += 1
-    item.lastWornAt = date.toISOString().slice(0, 10)
+    item.lastWornAt = localDateKey(date)
     if (item.cleanState === 'clean') item.cleanState = 'worn'
     item.updatedAt = nowIso()
     await putItem(toPersistable(item))

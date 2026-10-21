@@ -6,6 +6,7 @@ import type {
   OutfitItem,
   SettingRow,
   StoredImage,
+  WearLog,
 } from './types'
 
 export function newId(): string {
@@ -103,6 +104,76 @@ export async function deleteOutfit(id: string): Promise<void> {
   await db.transaction('rw', db.outfits, db.outfitItems, async () => {
     await db.outfitItems.where('outfitId').equals(id).delete()
     await db.outfits.delete(id)
+  })
+}
+
+export async function listWearLogs(): Promise<WearLog[]> {
+  const rows = await db.wearLogs.toArray()
+  return rows.sort(
+    (a, b) =>
+      b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt),
+  )
+}
+
+export interface RecordWearInput {
+  date: string
+  outfitId: string
+  itemIds: string[]
+  occasion?: string
+  weather?: string
+}
+
+export interface RecordWearResult {
+  log: WearLog
+  created: boolean
+}
+
+export async function recordOutfitWear(
+  input: RecordWearInput,
+): Promise<RecordWearResult> {
+  return db.transaction('rw', db.wearLogs, db.items, async () => {
+    const existing = await db.wearLogs
+      .where('date')
+      .equals(input.date)
+      .filter((log) => log.outfitId === input.outfitId)
+      .first()
+    const timestamp = nowIso()
+    const itemIds = [...new Set(input.itemIds)]
+
+    const log: WearLog = existing
+      ? {
+          ...existing,
+          itemIds,
+          occasion: input.occasion ?? existing.occasion,
+          weather: input.weather ?? existing.weather,
+        }
+      : {
+          id: newId(),
+          date: input.date,
+          outfitId: input.outfitId,
+          itemIds,
+          occasion: input.occasion,
+          weather: input.weather,
+          createdAt: timestamp,
+        }
+
+    await db.wearLogs.put(log)
+
+    if (!existing) {
+      for (const itemId of itemIds) {
+        const item = await db.items.get(itemId)
+        if (!item) continue
+        await db.items.put({
+          ...item,
+          wearCount: item.wearCount + 1,
+          lastWornAt: input.date,
+          cleanState: item.cleanState === 'clean' ? 'worn' : item.cleanState,
+          updatedAt: timestamp,
+        })
+      }
+    }
+
+    return { log, created: !existing }
   })
 }
 
