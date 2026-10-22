@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import BlobThumb from '@/components/BlobThumb.vue'
 import Icon from '@/components/Icon.vue'
 import OutfitPreview from '@/components/OutfitPreview.vue'
+import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { categoryDef, SEASONS, SLOTS, STYLES } from '@/db/constants'
 import type { Item, Outfit, OutfitItem } from '@/db/types'
@@ -21,6 +22,7 @@ const router = useRouter()
 const outfitsStore = useOutfitsStore()
 const wardrobe = useWardrobeStore()
 const { show } = useToast()
+const { askConfirm } = useConfirm()
 
 const outfit = ref<Outfit | null>(null)
 const pieces = ref<OutfitItem[]>([])
@@ -127,7 +129,13 @@ async function share() {
 async function remove() {
   const current = outfit.value
   if (!current) return
-  if (!window.confirm(`删除「${title.value}」？此操作不可撤销。`)) return
+  const confirmed = await askConfirm({
+    title: '删除搭配',
+    message: `删除「${title.value}」？此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!confirmed) return
   await outfitsStore.removeOutfit(current.id)
   show('已删除')
   router.replace('/outfits')

@@ -11,6 +11,7 @@ import {
   putImage,
   putItem,
 } from '@/db/repo'
+import { matchesItemQuery } from '@/services/search'
 import { localDateKey } from '@/services/today'
 
 export function createEmptyItem(category: CategoryId = 'top'): Item {
@@ -79,28 +80,13 @@ export const useWardrobeStore = defineStore('wardrobe', () => {
 
   const total = computed(() => items.value.length)
 
-  const filtered = computed(() => {
-    const q = search.value.trim().toLowerCase()
-    return items.value.filter((item) => {
+  const filtered = computed(() =>
+    items.value.filter((item) => {
       if (category.value !== 'all' && item.category !== category.value) return false
       if (clean.value !== 'all' && item.cleanState !== clean.value) return false
-      if (!q) return true
-      const haystack = [
-        item.name,
-        item.brand,
-        item.subcategory,
-        item.location,
-        item.material,
-        ...item.tags,
-        ...item.seasons,
-        ...item.styles,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-      return haystack.includes(q)
-    })
-  })
+      return matchesItemQuery(item, search.value)
+    }),
+  )
 
   const countByCategory = computed(() => {
     const map = new Map<CategoryId, number>()

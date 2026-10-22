@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import AppTabBar from '@/components/AppTabBar.vue'
+import ConfirmHost from '@/components/ConfirmHost.vue'
 import CutoutIndicator from '@/components/CutoutIndicator.vue'
 import ToastHost from '@/components/ToastHost.vue'
 
@@ -20,6 +21,7 @@ const showTabBar = computed(() => route.meta.tab === true)
     </main>
     <AppTabBar v-if="showTabBar" />
     <CutoutIndicator />
+    <ConfirmHost />
     <ToastHost />
   </div>
 </template>

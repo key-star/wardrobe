@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import Icon from '@/components/Icon.vue'
+import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { getSetting, setSetting } from '@/db/repo'
 import {
@@ -26,6 +27,7 @@ const cutout = useCutoutStore()
 const { running: cutoutRunning, total: cutoutTotal, done: cutoutDone, failed: cutoutFailed, percent: cutoutPercent } =
   storeToRefs(cutout)
 const { show } = useToast()
+const { askConfirm } = useConfirm()
 
 const photoCount = computed(() => items.value.filter((item) => item.hasOriginal).length)
 const cutoutCount = computed(() => items.value.filter((item) => item.hasCutout).length)
@@ -90,13 +92,18 @@ async function doExport() {
   }
 }
 
-function regenerateCutouts() {
+async function regenerateCutouts() {
   const ids = items.value.filter((item) => item.hasOriginal).map((item) => item.id)
   if (!ids.length) {
     show('还没有可处理的照片')
     return
   }
-  if (!window.confirm(`将重新抠图 ${ids.length} 件，期间可继续使用，继续？`)) return
+  const confirmed = await askConfirm({
+    title: '重新抠图',
+    message: `将重新抠图 ${ids.length} 件，期间可继续使用，继续？`,
+    confirmText: '开始',
+  })
+  if (!confirmed) return
   cutout.enqueue(ids, true)
   show('已加入抠图队列')
 }
@@ -112,7 +119,12 @@ async function onFile(event: Event) {
   if (!file) return
 
   const modeText = importMode.value === 'replace' ? '覆盖现有数据' : '与现有数据合并'
-  if (!window.confirm(`将「${file.name}」导入（${modeText}），继续？`)) return
+  const confirmed = await askConfirm({
+    title: '导入备份',
+    message: `将「${file.name}」导入（${modeText}），继续？`,
+    confirmText: '导入',
+  })
+  if (!confirmed) return
 
   busy.value = true
   try {

@@ -187,6 +187,10 @@ export async function setSetting(key: string, value: unknown): Promise<void> {
   await db.settings.put(row)
 }
 
+export async function deleteSetting(key: string): Promise<void> {
+  await db.settings.delete(key)
+}
+
 export async function countItems(): Promise<number> {
   return db.items.count()
 }

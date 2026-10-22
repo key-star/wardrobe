@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import Icon from '@/components/Icon.vue'
 import { useToast } from '@/composables/useToast'
+import { useToday } from '@/composables/useToday'
 import { categoryLabel } from '@/db/constants'
 import { downloadBlob } from '@/services/backup'
 import {
@@ -15,11 +16,9 @@ import {
   statsSummary,
   type UnwornRow,
 } from '@/services/stats'
-import { localDateKey, todayHeading } from '@/services/today'
 import { useWardrobeStore } from '@/stores/wardrobe'
 
-const TODAY = localDateKey()
-const heading = todayHeading()
+const { today, heading } = useToday()
 
 const router = useRouter()
 const wardrobe = useWardrobeStore()
@@ -29,10 +28,10 @@ const { show } = useToast()
 const showAllCost = ref(false)
 const showAllUnworn = ref(false)
 
-const summary = computed(() => statsSummary(items.value, TODAY))
+const summary = computed(() => statsSummary(items.value, today.value))
 const costRows = computed(() => costPerWearRows(items.value))
-const unwornRows = computed(() => longUnwornRows(items.value, TODAY))
-const reminders = computed(() => idleReminderRows(items.value, TODAY))
+const unwornRows = computed(() => longUnwornRows(items.value, today.value))
+const reminders = computed(() => idleReminderRows(items.value, today.value))
 
 const visibleCostRows = computed(() =>
   showAllCost.value ? costRows.value : costRows.value.slice(0, 8),
@@ -59,10 +58,10 @@ function reminderReason(row: UnwornRow): string {
 }
 
 function exportCsv() {
-  const csv = `\uFEFF${buildStatsCsv(items.value, TODAY)}`
+  const csv = `\uFEFF${buildStatsCsv(items.value, today.value)}`
   downloadBlob(
     new Blob([csv], { type: 'text/csv;charset=utf-8' }),
-    `wardrobe-stats-${TODAY}.csv`,
+    `wardrobe-stats-${today.value}.csv`,
   )
   show('已导出统计 CSV')
 }

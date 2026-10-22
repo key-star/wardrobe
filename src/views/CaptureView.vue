@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import BlobThumb from '@/components/BlobThumb.vue'
 import Icon from '@/components/Icon.vue'
+import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
 import { CATEGORIES } from '@/db/constants'
 import type { CategoryId } from '@/db/types'
@@ -25,6 +26,7 @@ const router = useRouter()
 const store = useWardrobeStore()
 const cutout = useCutoutStore()
 const { show } = useToast()
+const { askConfirm } = useConfirm()
 
 const entries = ref<CaptureEntry[]>([])
 const step = ref<'capture' | 'classify'>('capture')
@@ -148,9 +150,14 @@ onMounted(async () => {
   await store.load()
 })
 
-onBeforeRouteLeave(() => {
+onBeforeRouteLeave(async () => {
   if (saved.value || !entries.value.length) return true
-  return window.confirm('队列里还有未保存的照片，确定离开？')
+  return askConfirm({
+    title: '离开拍摄？',
+    message: '队列里还有未保存的照片，离开后这些照片会丢失。',
+    confirmText: '离开',
+    danger: true,
+  })
 })
 </script>
 

@@ -1,6 +1,6 @@
 # 衣橱 · Wardrobe — 设计与开发文档
 
-> 版本：v1.8（M5 规则推荐与穿着统计已实现；M4 今日穿搭、天气、穿着记录；M3 槽位搭配；M2 端上抠图与连续拍摄队列；含附录 A–E）
+> 版本：v1.9（M5 规则推荐与穿着统计；修复中文搜索、清除天气位置、跨午夜刷新、自定义确认弹层；M4 今日穿搭、天气、穿着记录；M3 槽位搭配；M2 端上抠图与连续拍摄队列；含附录 A–E）
 > 目标：仅凭本文档即可从零复刻出功能、数据、交互一致的软件。
 > 文中所有「必须」为复刻一致性要求，「建议」为可替换实现。
 
@@ -357,15 +357,17 @@ filtered = items
   .filter(query === '' || haystack.includes(query.toLowerCase()))
 ```
 
-其中 `haystack` 由以下字段以空格拼接后转小写：
+其中 `haystack` 由 `services/search.ts` 的 `itemSearchText()` 生成，以下字段以空格拼接后转小写：
 
 ```
-name, brand, subcategory, location, material, ...tags, ...seasons, ...styles
+name, brand, subcategory, location, material,
+...tags, ...styles, ...styles 的中文 label,
+...seasons, ...seasons 的中文 label
 ```
+
+同时保留枚举 id 与中文标签，搜 `commute` 或「通勤」都能命中。
 
 排序：`createdAt` 倒序（最新录入在最前）。
-
-> ⚠️ 已知缺陷（M2 未修，仍待办）：`seasons`/`styles` 拼的是枚举 id（`commute`），不是中文标签（`通勤`），所以搜「通勤」搜不到。修复方式见 §15.2 第 1 条。
 
 ### 6.4 分类与子类联动
 
@@ -381,7 +383,7 @@ name, brand, subcategory, location, material, ...tags, ...seasons, ...styles
 
 ### 6.6 删除规则
 
-- 单品删除需二次确认（`window.confirm`），文案包含单品名。
+- 单品删除需二次确认（`askConfirm` 底部弹层），文案包含单品名。
 - 删除后回到衣柜页，Toast「已删除」。
 - v1 无回收站/撤销。
 
@@ -546,7 +548,7 @@ wearLog 校验 id/date/itemIds；缺失字段给默认值
   settings 不因 replace 清空
 ```
 
-导入前必须 `window.confirm` 告知模式（合并/覆盖）。
+导入前必须用 `askConfirm` 弹层告知模式（合并/覆盖）。
 
 ### 8.8 版本演进
 
@@ -706,6 +708,7 @@ npx wrangler pages deploy dist --project-name wardrobe
 | `ItemCard` | `item` | — | 衣柜网格卡片，含清洁状态角标与主色点；`item.hasCutout` 时透明底 + 棋盘格 |
 | `BlobThumb` | `blob?` | — | `Blob → ObjectURL` 的 `<img>`，用于连拍队列/分类缩略图 |
 | `CutoutIndicator` | — | — | 全局抠图进度胶囊，挂在 `App.vue`；完成时 Toast 汇总成功/失败数 |
+| `ConfirmHost` | — | — | 全局确认底部弹层，挂在 `App.vue`；由 `useConfirm` 的 `askConfirm()` 驱动，支持取消、Escape 与危险按钮样式 |
 | `OutfitPreview` | `pieces, aspectRatio?, emptyText?` | — | 按槽位与 `layer` 用 DOM 绝对定位叠放缩略图，无槽位时显示空态 |
 | `OutfitCard` | `outfit, pieces, count` | — | 搭配列表卡片，优先显示 `cover`，无封面时用 `OutfitPreview` |
 | `SlotPickerSheet` | `open, slot, items, excludeIds, seasons` | `close`, `select(item)` | 底部候选抽屉，默认过滤「干净 · 在役 · 当季」，可切「显示全部」 |
@@ -760,7 +763,7 @@ npx wrangler pages deploy dist --project-name wardrobe
   次按钮「下一步：分类（N 件）」；有处理中或失败时禁用。
 - 分类态：每件一张卡片（缩略图 + 可选名称 + 7 个分类按钮），分类默认沿用上一张；
   底部固定「加入衣橱（N 件）」，保存后 Toast「已加入 N 件」并加入后台抠图队列。
-- 队列与分类两步之间用 `onBeforeRouteLeave` 拦截未保存离开（`window.confirm`）。
+- 队列与分类两步之间用 `onBeforeRouteLeave` + `askConfirm` 拦截未保存离开。
 
 #### 搭配列表 `/outfits`
 
@@ -861,7 +864,7 @@ wardrobe/
 │  └─ apple-touch-icon.png
 └─ src/
    ├─ main.ts                # createApp + pinia + router + 持久化申请
-   ├─ App.vue                # 壳层：router-view + TabBar + Toast
+   ├─ App.vue                # 壳层：router-view + TabBar + Toast + Confirm
    ├─ style.css              # 设计 token + 通用类
    ├─ router/index.ts        # hash 路由 + scrollBehavior
    ├─ db/
@@ -879,6 +882,8 @@ wardrobe/
    │  ├─ today.spec.ts
    │  ├─ weather.ts           # M4 Open-Meteo 天气 + 城市搜索 + WMO 文案
    │  ├─ weather.spec.ts
+   │  ├─ search.ts           # 搜索 haystack（含风格/季节中文 label）
+   │  ├─ search.spec.ts
    │  ├─ recommend.ts        # M5 规则评分、组合采样、套装排序
    │  ├─ recommend.spec.ts
    │  ├─ stats.ts            # M5 成本穿着比、久未穿、闲置提醒、覆盖率、CSV
@@ -892,7 +897,9 @@ wardrobe/
    │  └─ cutout.ts           # M2 后台抠图队列（串行、进度、失败计数）
    ├─ composables/
    │  ├─ useObjectUrl.ts     # Blob → ObjectURL，自动回收
-   │  └─ useToast.ts         # 模块级单例 Toast
+   │  ├─ useToast.ts         # 模块级单例 Toast
+   │  ├─ useToday.ts         # 今日日期/标题，午夜与回到前台时刷新
+   │  └─ useConfirm.ts       # Promise 化全局确认弹层
    ├─ components/            # 见 §10.3
    ├─ views/                 # 见 §4.2
    └─ test/setup.ts          # fake-indexeddb + Node Blob
@@ -928,7 +935,7 @@ db 不得 import stores/views
 | 11 | 编辑 | 回填全部字段与照片；保存后详情更新 |
 | 12 | 删除 | 二次确认；同时删除图片行；返回衣柜 |
 | 13 | 筛选 | 分类 + 清洁状态组合筛选即时生效 |
-| 14 | 搜索 | 名称/品牌/子类/位置/材质/标签可命中 |
+| 14 | 搜索 | 名称/品牌/子类/位置/材质/标签/风格/季节可命中，支持中文标签与枚举 id |
 | 15 | 空状态 | 无数据与无筛选结果有不同引导 |
 | 16 | 统计 | 件数、累计穿着、总价值、分类分布准确 |
 | 17 | 存储信息 | 显示用量/配额与持久化状态；可申请持久化 |
@@ -977,19 +984,24 @@ db 不得 import stores/views
 | 55 | 闲置提醒 | `status === 'idle'` 或 90 天未穿进入提醒列表 |
 | 56 | 覆盖率与平均成本 | 覆盖率 = 有穿着次数单品 / 总单品；平均成本按价格总和 / 计费次数总和 |
 | 57 | 统计 CSV | 导出名称、分类、价格、次数、每次成本、最后穿着、状态与穿着情况，带 UTF-8 BOM |
+| 58 | 中文风格/季节搜索 | 搜索「通勤」「秋」可命中；枚举 id 与中文 label 同时参与匹配 |
+| 59 | 清除天气位置 | 天气设置弹层可清空位置与缓存，回到未设置状态并显示空态 |
+| 60 | 跨午夜日期刷新 | 午夜定时器、窗口聚焦与页面恢复可见时重算今日；穿着记录写入新日期 |
+| 61 | 自定义确认弹层 | 删除/覆盖/重新导入等确认统一使用底部弹层，支持取消、Escape 与危险按钮 |
 
 ### 12.3 当前验证状态
 
 ```
 npm run typecheck   ✔ 通过
-npm test            ✔ 7 文件 / 55 用例通过（新增 M5 评分、采样、统计、CSV 用例）
-npm run build       ✔ 通过，PWA precache 48 项
+npm test            ✔ 10 文件 / 63 用例通过（M5 评分、采样、统计、CSV + 搜索、今日刷新、确认弹层、删除配置）
+npm run build       ✔ 通过，142 modules，PWA precache 48 项
 Playwright 冒烟     ✔ 录入→详情→网格→导出备份，0 控制台错误
 Playwright M2 E2E   ✔ 连拍上传→分类保存→后台抠图→衣柜透明底→详情切换
 Playwright M3 E2E   ✔ 7 槽位选衣（配饰多件）→ 保存生成封面 → 详情/分享下载 → 收藏 → 编辑移除 → 列表封面，0 控制台错误
 Playwright M4 E2E   ✔ 手动设置城市 → 天气渲染（模拟 Open-Meteo）→ 候选套装 → 穿这套写入穿着记录、单品转 worn → 备份含 wearLogs.json，0 控制台错误（截图见 docs/screenshots/m4）
 M5 逻辑验证         ✔ 规则评分/稳定采样/过滤/统计口径/CSV 单元测试通过；构建包含 StatsView chunk
 Playwright M5 E2E   ✔ 390×844：设置入口 → 匹配分与 3 套规则推荐（季节/场合/待洗/闲置过滤）→ 存为搭配并校验评分备注 → 统计概览/成本与久未穿排序/展开收起/CSV 下载与转义，0 控制台错误（截图见 docs/screenshots/m5-01…m5-09）
+Playwright 缺陷修复 ✔ 390×844：清除天气位置 → 时钟跨午夜（10-22 23:59 → 10-23）→ 中文搜索「通勤」→ 自定义确认弹层；原生 dialog 0 次，0 控制台错误（截图见 docs/screenshots/m5-fixes/m5-fixes-01…06）
 抠图实测（无头）     ✔ 冷启动 71s（含 88MB 模型下载）；热启动 9.9s（单线程回退）
 ```
 
@@ -1003,8 +1015,8 @@ Playwright M5 E2E   ✔ 390×844：设置入口 → 匹配分与 3 套规则推�
 | M4 | 今天 + 天气 + 穿着记录 | ✅ 已实现（M4） |
 | M5 | 规则推荐 + 统计 | ✅ 已实现（M5） |
 
-**下一步建议**：M4 小改进：§15.2 第 9/10 条（清除天气位置、跨午夜日期刷新）。
-顺手可修：§6.3 / §15.2 第 1 条的搜索中文标签缺陷，以及 §15.2 的批量整理与重复检测。
+**下一步建议**：按 §15.2 批次 B 处理整理体验：**2 → 3 → 8**（重复检测、批量改分类/删除、图片解码缓存）。
+批次 C 的删除回收站、流式备份、分页/虚拟滚动按实际数据规模再排期。
 
 ---
 
@@ -1041,11 +1053,16 @@ globalThis.Blob = NodeBlob as unknown as typeof Blob
 
 | 文件 | 用例 |
 | --- | --- |
-| `db/repo.spec.ts` | 单品/图片读写与级联删除；套装与套内单品 CRUD、整体替换、删除单品时清理套装引用；穿着记录写入、同日同套去重不重复累计、同日多套并存 |
+| `db/repo.spec.ts` | 单品/图片读写与级联删除；套装与套内单品 CRUD、整体替换、删除单品时清理套装引用；穿着记录写入、同日同套去重不重复累计、同日多套并存；删除配置项 |
 | `services/backup.spec.ts` | 导出→清库→导入完整还原（含 thumb、原图、套装、套内单品、封面与穿着记录）；merge 幂等；replace 清理旧搭配与穿着记录；旧备份不含 `wearLogs.json` 时保留本机穿着记录；非法文件报错 |
 | `services/image.spec.ts` | 色板精确命中；越界颜色吸附到最近项 |
 | `services/today.spec.ts` | 本地日期 key 与今日标题；温度→季节与保暖级别；今天/昨天/跨年日期标签；套装季节回退、在役/干净/季节/场合过滤与收藏/评分排序；空季节套装视为通用 |
 | `services/weather.spec.ts` | WMO 天气码中文文案与 emoji（晴/多云/雾/雨雪/雷阵雨）；未知天气码回退「天气未知」 |
+| `services/recommend.spec.ts` | 色彩/正式度/温度/新鲜度/历史偏好评分；稳定采样与同分排序；空风格视为通用 |
+| `services/stats.spec.ts` | 日期差、成本穿着比、久未穿、闲置、覆盖率、平均成本与 CSV 转义 |
+| `services/search.spec.ts` | 中文风格/季节标签与枚举 id 均可命中；空查询返回全部；品牌/标签/材质匹配 |
+| `composables/useToday.spec.ts` | 未来时间戳的午夜定时器触发日期切换；切换后标题与回调更新；无变化不触发回调 |
+| `composables/useConfirm.spec.ts` | 确认返回 true、取消/Escape 返回 false；新请求会取消旧请求；默认按钮文案 |
 
 ### 13.4 每个用例的 beforeEach
 
@@ -1196,7 +1213,7 @@ await db.open()
   - 天气：`https://api.open-meteo.com/v1/forecast?latitude=&longitude=&current=temperature_2m,weather_code&timezone=auto&forecast_days=1`
   - 城市搜索：`https://geocoding-api.open-meteo.com/v1/search?name=&count=6&language=zh&format=json`
 - 城市存 `settings.weatherLocation = { name, detail?, latitude, longitude }`；天气结果存 `settings.weatherCache`。
-- 设置入口是今日页右上角的位置按钮，打开底部弹层：搜索城市 / 使用当前定位 / 手动输入经纬度；位置只存本机。
+- 设置入口是今日页右上角的位置按钮，打开底部弹层：搜索城市 / 使用当前定位 / 手动输入经纬度 / 清除天气位置；位置只存本机。清除时同时删除 `weatherLocation` 与 `weatherCache`，回到未设置状态。
 - 离线或请求失败时使用上次缓存并标注「天气为上次数据」；没有缓存时按月份推断季节，仍可手动记录。
 - WMO 天气码映射中文文案与 emoji（`services/weather.ts` 的 `describeWeather`）。
 
@@ -1341,7 +1358,10 @@ for slot in [上装, 下装, 鞋]:
 - 原因：Dexie 5 的表参数重载最多 5 张表，第 6 张起需要数组形式。
 - 修复：`db.transaction('rw', [db.items, db.images, db.outfits, db.outfitItems, db.wearLogs, db.settings], fn)`。
 
-### 15.2 现存缺陷
+### 15.2 需要修复的缺陷与修复顺序
+
+> 共 10 项。已完成：#1 中文搜索、#6 自定义确认弹层、#9 清除天气位置、#10 跨午夜刷新。
+> 剩余待修：#2 重复检测、#3 批量改分类/删除、#4 删除回收站、#5 流式备份、#7 分页/虚拟滚动、#8 图片解码缓存。
 
 | # | 问题 | 影响 | 建议修复 |
 | --- | --- | --- | --- |
@@ -1355,6 +1375,14 @@ for slot in [上装, 下装, 鞋]:
 | 8 | 图片详情每次从 Blob 解码 | 首次打开有轻微延迟 | 缓存解码后的 ImageBitmap |
 | 9 | 天气位置只能更换，不能清除 | 想回到「未设置」状态只能改选别的城市 | 天气设置弹层加「清除位置」，同时清 `settings.weatherLocation` 与 `settings.weatherCache` |
 | 10 | 页面跨过午夜后日期不自动翻页 | 应用长时间停留在今日页时，`TODAY` 仍是昨天，记录会写到旧日期 | 监听 `visibilitychange` 或定时器，日期变化后重算 `TODAY`、刷新今日记录与候选 |
+
+**修复顺序**
+
+| 批次 | 编号 | 范围 | 状态 |
+| --- | --- | --- | --- |
+| A | 9 → 10 → 1 → 6 | 低风险快修：清除位置、跨午夜刷新、中文搜索、确认弹层 | ✅ 已完成（#1/#6/#9/#10） |
+| B | 2 → 3 → 8 | 整理体验：重复检测、批量操作、图片解码缓存 | 待办 |
+| C | 4 → 5 → 7 | 结构性改造：删除回收站、流式备份、分页/虚拟滚动 | 暂缓，按数据规模再做 |
 
 ### 15.3 平台风险
 
@@ -1608,6 +1636,9 @@ npm run build
 | 图片处理 | `src/services/image.ts` |
 | 备份 | `src/services/backup.ts` |
 | 存储与配额 | `src/services/storage.ts` |
+| 搜索匹配 | `src/services/search.ts` |
+| 今日日期联动 | `src/composables/useToday.ts` |
+| 全局确认弹层 | `src/composables/useConfirm.ts`、`src/components/ConfirmHost.vue` |
 | 业务状态与筛选 | `src/stores/wardrobe.ts` |
 | 路由 | `src/router/index.ts` |
 | 设计 token | `src/style.css` |
@@ -1817,8 +1848,9 @@ npm run build
 | 展开 | 查看全部 / 收起 |
 | 天气设置弹层标题 | 设置天气位置 |
 | 天气设置说明 | 位置只保存在本机，用于按当地天气筛选套装。天气数据来自 Open-Meteo，无需注册。 |
-| 天气设置字段 | 搜索城市（占位：搜索城市，如 杭州）/ 搜索 / 搜索中 / 使用当前位置 / 定位中 / 手动输入经纬度 / 位置名称（可选）/ 纬度 / 经度 / 使用这组坐标 |
+| 天气设置字段 | 搜索城市（占位：搜索城市，如 杭州）/ 搜索 / 搜索中 / 使用当前位置 / 定位中 / 手动输入经纬度 / 位置名称（可选）/ 纬度 / 经度 / 使用这组坐标 / 清除天气位置 |
 | 天气设置错误 | 没有找到这个城市，试试更完整的名称 / 搜索失败，请检查网络 / 请输入有效的纬度（-90~90）和经度（-180~180）/ 定位失败，请手动选择城市 |
+| 天气设置 Toast | 已清除天气位置 |
 
 ### A9 备份模块错误文案
 
@@ -1851,6 +1883,19 @@ npm run build
 | Toast | 已导出统计 CSV |
 | 空态 | 衣橱里还没有单品 / 添加第一件 |
 | CSV 列 | 名称、分类、价格、穿着次数、每次成本、最后穿着、状态、穿着情况 |
+
+### A12 全局确认弹层（`ConfirmHost`）
+
+| 场景 | 标题 / 内容 / 按钮 |
+| --- | --- |
+| 删除单品 | 删除单品 / 删除「{名称}」？此操作不可撤销。 / 取消 · 删除 |
+| 删除搭配 | 删除搭配 / 删除「{名称}」？此操作不可撤销。 / 取消 · 删除 |
+| 重新抠图 | 重新抠图 / 将重新抠图 {n} 件，期间可继续使用，继续？ / 取消 · 开始 |
+| 导入备份 | 导入备份 / 将「{文件名}」导入（覆盖现有数据/与现有数据合并），继续？ / 取消 · 导入 |
+| 离开拍摄 | 离开拍摄？ / 队列里还有未保存的照片，离开后这些照片会丢失。 / 取消 · 离开 |
+
+- 默认按钮文案为「取消 / 确定」；`danger` 时确认按钮使用危险样式。
+- 点遮罩、点取消或按 `Escape` 返回 `false`；确认返回 `true`。
 
 ---
 

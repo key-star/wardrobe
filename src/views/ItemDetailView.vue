@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Icon from '@/components/Icon.vue'
 import { useToast } from '@/composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 import { useObjectUrl } from '@/composables/useObjectUrl'
 import {
   categoryDef,
@@ -24,6 +25,7 @@ const route = useRoute()
 const router = useRouter()
 const store = useWardrobeStore()
 const { show } = useToast()
+const { askConfirm } = useConfirm()
 
 const item = ref<Item | null>(null)
 const original = ref<Blob | null>(null)
@@ -146,7 +148,13 @@ function edit() {
 async function remove() {
   const current = item.value
   if (!current) return
-  if (!window.confirm(`删除「${title.value}」？此操作不可撤销。`)) return
+  const confirmed = await askConfirm({
+    title: '删除单品',
+    message: `删除「${title.value}」？此操作不可撤销。`,
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!confirmed) return
   await store.removeItem(current.id)
   show('已删除')
   router.replace('/')

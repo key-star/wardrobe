@@ -3,9 +3,11 @@ import { db } from '@/db/db'
 import {
   deleteItem,
   deleteOutfit,
+  deleteSetting,
   getImage,
   getItem,
   getOutfit,
+  getSetting,
   listItems,
   listOutfitItems,
   listOutfits,
@@ -15,6 +17,7 @@ import {
   putOutfit,
   recordOutfitWear,
   replaceOutfitItems,
+  setSetting,
 } from '@/db/repo'
 import type { OutfitItem } from '@/db/types'
 import { createEmptyOutfit } from '@/stores/outfits'
@@ -215,5 +218,15 @@ describe('wear log repository', () => {
     const logs = await listWearLogs()
     expect(logs).toHaveLength(3)
     expect(logs.map((log) => log.date)).toEqual(['2026-10-22', '2026-10-22', '2026-10-21'])
+  })
+})
+
+describe('settings repository', () => {
+  it('stores and deletes settings', async () => {
+    await setSetting('weatherLocation', { name: '杭州' })
+    expect(await getSetting('weatherLocation')).toEqual({ name: '杭州' })
+
+    await deleteSetting('weatherLocation')
+    expect(await getSetting('weatherLocation')).toBeUndefined()
   })
 })

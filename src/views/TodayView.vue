@@ -5,8 +5,16 @@ import Icon from '@/components/Icon.vue'
 import RecommendCard from '@/components/RecommendCard.vue'
 import TodayPick from '@/components/TodayPick.vue'
 import { useToast } from '@/composables/useToast'
+import { useToday } from '@/composables/useToday'
 import { SEASONS, STYLES, categoryLabel } from '@/db/constants'
-import { getSetting, listWearLogs, newId, recordOutfitWear, setSetting } from '@/db/repo'
+import {
+  deleteSetting,
+  getSetting,
+  listWearLogs,
+  newId,
+  recordOutfitWear,
+  setSetting,
+} from '@/db/repo'
 import type { WearLog } from '@/db/types'
 import { renderOutfitCover, type CollagePiece } from '@/services/collage'
 import {
@@ -20,9 +28,7 @@ import {
 import {
   dayLabel,
   isOutfitEligible,
-  localDateKey,
   seasonsForTemperature,
-  todayHeading,
   warmthHint,
   warmthRange,
 } from '@/services/today'
@@ -38,8 +44,7 @@ import { createEmptyOutfit, layerFor, useOutfitsStore } from '@/stores/outfits'
 import { useWardrobeStore } from '@/stores/wardrobe'
 
 const OCCASIONS = STYLES.filter((style) => style.id !== 'home')
-const TODAY = localDateKey()
-const heading = todayHeading()
+const { today, heading } = useToday()
 
 const wardrobe = useWardrobeStore()
 const outfitsStore = useOutfitsStore()
@@ -130,7 +135,7 @@ const scoredEligible = computed(() =>
   eligible.value
     .map((outfit) =>
       scoreOutfit(outfit, outfitPieces(outfit.id), itemMap.value, {
-        today: TODAY,
+        today: today.value,
         targetWarmth: targetWarmth.value,
         history: wearHistory.value,
       }),
@@ -147,7 +152,7 @@ const scoredEligible = computed(() =>
 const candidates = computed(() => scoredEligible.value.slice(0, 3))
 const recommendations = computed(() =>
   recommendCombinations(items.value, logs.value, {
-    today: TODAY,
+    today: today.value,
     seasons: weatherSeasons.value,
     occasion: occasion.value || undefined,
     targetWarmth: targetWarmth.value,
@@ -171,12 +176,12 @@ const wornTodayIds = computed(
   () =>
     new Set(
       logs.value
-        .filter((log) => log.date === TODAY && log.outfitId)
+        .filter((log) => log.date === today.value && log.outfitId)
         .map((log) => log.outfitId as string),
     ),
 )
-const todayLogs = computed(() => logs.value.filter((log) => log.date === TODAY))
-const pastLogs = computed(() => logs.value.filter((log) => log.date !== TODAY))
+const todayLogs = computed(() => logs.value.filter((log) => log.date === today.value))
+const pastLogs = computed(() => logs.value.filter((log) => log.date !== today.value))
 const visibleLogs = computed(() =>
   showAllLogs.value ? pastLogs.value : pastLogs.value.slice(0, 6),
 )
@@ -236,7 +241,7 @@ async function wearOutfit(outfitId: string) {
   recordingId.value = outfitId
   try {
     const result = await recordOutfitWear({
-      date: TODAY,
+      date: today.value,
       outfitId,
       itemIds: outfitPiecesForRecord.map((piece) => piece.itemId),
       occasion: occasion.value || outfitsStore.byId(outfitId)?.occasions[0],
@@ -385,6 +390,22 @@ async function useCurrentLocation() {
   } finally {
     locating.value = false
   }
+}
+
+async function clearLocation() {
+  weatherController?.abort()
+  location.value = null
+  weather.value = null
+  weatherStale.value = false
+  weatherError.value = ''
+  weatherLoading.value = false
+  pickedId.value = null
+  setupOpen.value = false
+  await Promise.all([
+    deleteSetting('weatherLocation'),
+    deleteSetting('weatherCache'),
+  ])
+  show('已清除天气位置')
 }
 
 async function submitManual() {
@@ -605,7 +626,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="records">
         <div v-for="log in visibleLogs" :key="log.id" class="record">
-          <div class="record__day">{{ dayLabel(log.date, TODAY) }}</div>
+          <div class="record__day">{{ dayLabel(log.date, today) }}</div>
           <div class="record__body">
             <span class="record__title">{{ logTitle(log) }}</span>
             <span class="record__meta">{{ logMeta(log) }}</span>
@@ -660,6 +681,10 @@ onBeforeUnmount(() => {
 
               <button class="btn btn--block" :disabled="locating" @click="useCurrentLocation">
                 <Icon name="pin" :size="18" />{{ locating ? '定位中' : '使用当前位置' }}
+              </button>
+
+              <button v-if="location" class="link-btn link-btn--danger" @click="clearLocation">
+                清除天气位置
               </button>
 
               <button class="link-btn" @click="manualOpen = !manualOpen">
@@ -1033,6 +1058,10 @@ onBeforeUnmount(() => {
   align-self: center;
   color: var(--accent);
   font-size: 13px;
+}
+
+.link-btn--danger {
+  color: var(--danger);
 }
 
 .manual {
