@@ -164,6 +164,18 @@ async function onFile(event: Event) {
     </div>
 
     <div class="section">
+      <div class="section__title">穿着统计</div>
+      <div class="card block">
+        <p class="block__desc">
+          查看每件单品的成本穿着比、久未穿与闲置提醒，也可以导出 CSV 慢慢分析。
+        </p>
+        <router-link to="/stats" class="btn btn--block">
+          <Icon name="chart" :size="19" />打开穿着统计
+        </router-link>
+      </div>
+    </div>
+
+    <div class="section">
       <div class="section__title">备份与迁移</div>
       <div class="card block">
         <p class="block__hint">{{ backupHint }}</p>

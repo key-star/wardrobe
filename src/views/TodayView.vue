@@ -2,17 +2,25 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import Icon from '@/components/Icon.vue'
+import RecommendCard from '@/components/RecommendCard.vue'
 import TodayPick from '@/components/TodayPick.vue'
 import { useToast } from '@/composables/useToast'
-import { SEASONS, STYLES } from '@/db/constants'
-import { getSetting, listWearLogs, recordOutfitWear, setSetting } from '@/db/repo'
+import { SEASONS, STYLES, categoryLabel } from '@/db/constants'
+import { getSetting, listWearLogs, newId, recordOutfitWear, setSetting } from '@/db/repo'
 import type { WearLog } from '@/db/types'
-import type { CollagePiece } from '@/services/collage'
+import { renderOutfitCover, type CollagePiece } from '@/services/collage'
+import {
+  RECOMMEND_SLOTS,
+  buildWearHistory,
+  compareScored,
+  recommendCombinations,
+  scoreOutfit,
+  type Recommendation,
+} from '@/services/recommend'
 import {
   dayLabel,
   isOutfitEligible,
   localDateKey,
-  rankOutfits,
   seasonsForTemperature,
   todayHeading,
   warmthHint,
@@ -26,7 +34,7 @@ import {
   type WeatherPlace,
   type WeatherSnapshot,
 } from '@/services/weather'
-import { useOutfitsStore } from '@/stores/outfits'
+import { createEmptyOutfit, layerFor, useOutfitsStore } from '@/stores/outfits'
 import { useWardrobeStore } from '@/stores/wardrobe'
 
 const OCCASIONS = STYLES.filter((style) => style.id !== 'home')
@@ -45,6 +53,8 @@ const pickedId = ref<string | null>(null)
 const recordingId = ref<string | null>(null)
 const lastRecordedId = ref<string | null>(null)
 const showAllLogs = ref(false)
+const savingRecommendation = ref<string | null>(null)
+const savedRecommendations = ref<string[]>([])
 
 const location = ref<WeatherLocation | null>(null)
 const weather = ref<WeatherSnapshot | null>(null)
@@ -67,6 +77,12 @@ let searchController: AbortController | null = null
 
 const itemMap = computed(() => new Map(items.value.map((item) => [item.id, item])))
 const weatherSeasons = computed(() => seasonsForTemperature(weather.value?.temperature))
+const wearHistory = computed(() => buildWearHistory(logs.value))
+const targetWarmth = computed(() => {
+  if (!weather.value) return 3
+  const [min, max] = warmthRange(weather.value.temperature)
+  return (min + max) / 2
+})
 
 function outfitPieces(outfitId: string) {
   return pieces.value
@@ -100,19 +116,57 @@ const occasionLabel = computed(
 )
 
 const eligible = computed(() =>
-  rankOutfits(
-    outfits.value.filter((outfit) =>
-      isOutfitEligible(
-        outfit,
-        outfitPieces(outfit.id),
-        itemMap.value,
-        weatherSeasons.value,
-        occasion.value || undefined,
-      ),
+  outfits.value.filter((outfit) =>
+    isOutfitEligible(
+      outfit,
+      outfitPieces(outfit.id),
+      itemMap.value,
+      weatherSeasons.value,
+      occasion.value || undefined,
     ),
   ),
 )
-const candidates = computed(() => eligible.value.slice(0, 3))
+const scoredEligible = computed(() =>
+  eligible.value
+    .map((outfit) =>
+      scoreOutfit(outfit, outfitPieces(outfit.id), itemMap.value, {
+        today: TODAY,
+        targetWarmth: targetWarmth.value,
+        history: wearHistory.value,
+      }),
+    )
+    .filter((row): row is NonNullable<typeof row> => row !== null)
+    .sort(
+      (a, b) =>
+        compareScored(a, b) ||
+        Number(b.outfit.favorite) - Number(a.outfit.favorite) ||
+        (b.outfit.rating ?? 0) - (a.outfit.rating ?? 0) ||
+        b.outfit.updatedAt.localeCompare(a.outfit.updatedAt),
+    ),
+)
+const candidates = computed(() => scoredEligible.value.slice(0, 3))
+const recommendations = computed(() =>
+  recommendCombinations(items.value, logs.value, {
+    today: TODAY,
+    seasons: weatherSeasons.value,
+    occasion: occasion.value || undefined,
+    targetWarmth: targetWarmth.value,
+    sampleSize: 200,
+    limit: 3,
+  }),
+)
+const missingRecommendationSlots = computed(() =>
+  RECOMMEND_SLOTS.filter(
+    (slot) => !items.value.some((item) => item.category === slot),
+  ).map((slot) => categoryLabel(slot)),
+)
+const recommendationHint = computed(() => {
+  if (recommendations.value.length) return ''
+  if (missingRecommendationSlots.value.length) {
+    return `衣橱里还需要${missingRecommendationSlots.value.join('、')}，才能自动组合推荐。`
+  }
+  return '没有同时满足「干净 · 在役 · 当季」的上装、下装和鞋，先整理一下衣橱吧。'
+})
 const wornTodayIds = computed(
   () =>
     new Set(
@@ -168,8 +222,8 @@ function setOccasion(id: string) {
 function pickRandom() {
   if (!candidates.value.length) return
   const pick = candidates.value[Math.floor(Math.random() * candidates.value.length)]
-  pickedId.value = pick.id
-  show(`试试「${titleOf(pick.id)}」`)
+  pickedId.value = pick.outfit.id
+  show(`试试「${titleOf(pick.outfit.id)}」`)
 }
 
 async function wearOutfit(outfitId: string) {
@@ -199,6 +253,49 @@ async function wearOutfit(outfitId: string) {
     show('记录失败，请重试')
   } finally {
     recordingId.value = null
+  }
+}
+
+function recommendationKey(recommendation: Recommendation): string {
+  return recommendation.items.map((item) => item.id).join('|')
+}
+
+function recommendationPieces(recommendation: Recommendation): CollagePiece[] {
+  return recommendation.items.map((item) => ({
+    item,
+    slot: item.category,
+    layer: layerFor(item.category),
+  }))
+}
+
+async function saveRecommendation(recommendation: Recommendation) {
+  const key = recommendationKey(recommendation)
+  if (savingRecommendation.value || savedRecommendations.value.includes(key)) return
+  savingRecommendation.value = key
+  try {
+    const outfit = createEmptyOutfit()
+    outfit.name = `推荐 · ${heading}`
+    outfit.seasons = [...weatherSeasons.value]
+    outfit.occasions = occasion.value ? [occasion.value] : []
+    outfit.notes = `规则评分 ${Math.round(recommendation.score)}`
+    const pieces = recommendation.items.map((item) => ({
+      id: newId(),
+      outfitId: outfit.id,
+      itemId: item.id,
+      slot: item.category,
+      layer: layerFor(item.category),
+    }))
+    await outfitsStore.saveOutfit({ outfit, items: pieces })
+    const cover = await renderOutfitCover(recommendationPieces(recommendation)).catch(
+      () => null,
+    )
+    if (cover) await outfitsStore.setCover(outfit.id, cover)
+    savedRecommendations.value = [...savedRecommendations.value, key]
+    show('已保存为搭配')
+  } catch {
+    show('保存失败，请重试')
+  } finally {
+    savingRecommendation.value = null
   }
 }
 
@@ -439,14 +536,15 @@ onBeforeUnmount(() => {
 
       <div v-if="candidates.length" class="candidates">
         <TodayPick
-          v-for="outfit in candidates"
-          :key="outfit.id"
-          :outfit="outfit"
-          :pieces="previewPieces(outfit.id)"
-          :count="outfitsStore.countFor(outfit.id)"
-          :worn="wornTodayIds.has(outfit.id)"
-          :picked="pickedId === outfit.id"
-          @wear="wearOutfit(outfit.id)"
+          v-for="row in candidates"
+          :key="row.outfit.id"
+          :outfit="row.outfit"
+          :pieces="previewPieces(row.outfit.id)"
+          :count="outfitsStore.countFor(row.outfit.id)"
+          :worn="wornTodayIds.has(row.outfit.id)"
+          :picked="pickedId === row.outfit.id"
+          :score="row.score"
+          @wear="wearOutfit(row.outfit.id)"
         />
 
         <button v-if="candidates.length > 1" class="btn btn--block random" @click="pickRandom">
@@ -473,6 +571,25 @@ onBeforeUnmount(() => {
         <button v-if="occasion" class="btn" @click="setOccasion('')">看看其他场合</button>
         <router-link v-else to="/outfits" class="btn">去整理搭配</router-link>
       </div>
+    </div>
+
+    <div class="section">
+      <div class="section__head">
+        <div class="section__title">规则推荐</div>
+        <span class="section__hint">色彩 · 正式度 · 温度 · 新鲜度</span>
+      </div>
+
+      <div v-if="recommendations.length" class="candidates">
+        <RecommendCard
+          v-for="recommendation in recommendations"
+          :key="recommendationKey(recommendation)"
+          :recommendation="recommendation"
+          :saving="savingRecommendation === recommendationKey(recommendation)"
+          :saved="savedRecommendations.includes(recommendationKey(recommendation))"
+          @save="saveRecommendation(recommendation)"
+        />
+      </div>
+      <p v-else class="card hint-text">{{ recommendationHint }}</p>
     </div>
 
     <div v-if="pastLogs.length" class="section">
@@ -765,6 +882,13 @@ onBeforeUnmount(() => {
 .random {
   min-height: 42px;
   font-size: 14px;
+}
+
+.hint-text {
+  padding: 16px;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .hint-card {

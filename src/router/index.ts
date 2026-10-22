@@ -43,6 +43,11 @@ export const router = createRouter({
       meta: { tab: true },
     },
     {
+      path: '/stats',
+      name: 'stats',
+      component: () => import('@/views/StatsView.vue'),
+    },
+    {
       path: '/capture',
       name: 'capture',
       component: () => import('@/views/CaptureView.vue'),

@@ -60,6 +60,7 @@ const PATHS: Record<string, string[]> = {
     'M19.5 12a7.5 7.5 0 01-12.6 5.5',
     'M4 19.5v-6h6',
   ],
+  chart: ['M4 20V4', 'M4 20h16', 'M8 17v-5', 'M12 17V8', 'M16 17v-3'],
 }
 
 const props = withDefaults(

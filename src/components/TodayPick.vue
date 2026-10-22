@@ -13,6 +13,7 @@ const props = defineProps<{
   count: number
   worn: boolean
   picked: boolean
+  score?: number
 }>()
 
 const emit = defineEmits<{
@@ -40,6 +41,7 @@ const occasionText = computed(() =>
     <div class="pick__body">
       <div class="pick__head">
         <router-link :to="`/outfits/${outfit.id}`" class="pick__title">{{ title }}</router-link>
+        <span v-if="score != null" class="pick__score">匹配 {{ Math.round(score) }}</span>
         <span v-if="picked" class="pick__flag">随机选中</span>
       </div>
       <div class="pick__meta">
@@ -100,6 +102,18 @@ const occasionText = computed(() =>
   height: 100%;
   border: none;
   border-radius: 0;
+}
+
+.pick__score {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .pick__flag {

@@ -1,6 +1,6 @@
 # 衣橱 · Wardrobe — 设计与开发文档
 
-> 版本：v1.7（M4 今日穿搭、天气、穿着记录已实现；含 M3 槽位搭配、M2 端上抠图与连续拍摄队列；M5 设计保留；含附录 A–E）
+> 版本：v1.8（M5 规则推荐与穿着统计已实现；M4 今日穿搭、天气、穿着记录；M3 槽位搭配；M2 端上抠图与连续拍摄队列；含附录 A–E）
 > 目标：仅凭本文档即可从零复刻出功能、数据、交互一致的软件。
 > 文中所有「必须」为复刻一致性要求，「建议」为可替换实现。
 
@@ -178,6 +178,7 @@ Tab 栏仅在这 4 个路由显示（`route.meta.tab === true`），详情/编�
 '/outfits/:id/edit': OutfitEditView
 '/today':          TodayView         meta.tab = true，今日穿搭 / 天气 / 穿着记录
 '/settings':       SettingsView      meta.tab = true
+'/stats':          StatsView         穿着统计（M5，从设置页进入）
 '/capture':        CaptureView       连续拍摄队列（M2）
 '/item/new':       ItemEditView
 '/item/:id':       ItemDetailView
@@ -199,6 +200,8 @@ Tab 栏仅在这 4 个路由显示（`route.meta.tab === true`），详情/编�
 搭配详情 ──分享长图──> 系统分享 / 下载
 设置 ──导出/导入──> 文件系统
 设置 ──重新抠图全部──> 后台抠图队列（任意页面继续）
+设置 ──穿着统计──> 统计页（成本穿着比 / 久未穿 / 闲置提醒 / CSV）
+今天 ──规则推荐──> 生成组合 ──存为搭配──> 搭配详情
 ```
 
 ---
@@ -706,9 +709,10 @@ npx wrangler pages deploy dist --project-name wardrobe
 | `OutfitPreview` | `pieces, aspectRatio?, emptyText?` | — | 按槽位与 `layer` 用 DOM 绝对定位叠放缩略图，无槽位时显示空态 |
 | `OutfitCard` | `outfit, pieces, count` | — | 搭配列表卡片，优先显示 `cover`，无封面时用 `OutfitPreview` |
 | `SlotPickerSheet` | `open, slot, items, excludeIds, seasons` | `close`, `select(item)` | 底部候选抽屉，默认过滤「干净 · 在役 · 当季」，可切「显示全部」 |
-| `TodayPick` | `outfit, pieces, count, worn, picked` | `wear` | M4 今日候选套装卡片，优先 `cover`，无封面时用 `OutfitPreview` |
+| `TodayPick` | `outfit, pieces, count, worn, picked, score?` | `wear` | M4 今日候选套装卡片，优先 `cover`，无封面时用 `OutfitPreview`；M5 显示匹配分 |
+| `RecommendCard` | `recommendation, saving?, saved?` | `save` | M5 规则推荐组合卡片，展示评分拆分并支持存为搭配 |
 
-图标名：`grid, shirt, sun, gear, plus, camera, photo, back, trash, pencil, search, download, upload, close, check, alert, sparkle, hanger, pin, refresh`。
+图标名：`grid, shirt, sun, gear, plus, camera, photo, back, trash, pencil, search, download, upload, close, check, alert, sparkle, hanger, pin, refresh, chart`。
 
 ### 10.4 页面细节
 
@@ -782,10 +786,21 @@ npx wrangler pages deploy dist --project-name wardrobe
 #### 设置 `/settings`
 
 1. 衣橱概览：3 个统计卡 + 分类分布列表。
-2. 备份与迁移：备份提示（今天/ N 天前/超过 7 天警告）+ 导出 + 导入模式 chips + 选择文件。
-3. 本地存储：用量条 + 持久化状态 + 申请按钮。
-4. 照片与抠图（M2）：已抠图 N / M 件说明 + 队列进度条 + 「重新抠图全部」。
-5. 安装到主屏幕：iOS/Android 操作说明。
+2. 穿着统计（M5）：入口卡片，跳转 `/stats`。
+3. 备份与迁移：备份提示（今天/ N 天前/超过 7 天警告）+ 导出 + 导入模式 chips + 选择文件。
+4. 本地存储：用量条 + 持久化状态 + 申请按钮。
+5. 照片与抠图（M2）：已抠图 N / M 件说明 + 队列进度条 + 「重新抠图全部」。
+6. 安装到主屏幕：iOS/Android 操作说明。
+
+#### 穿着统计 `/stats`（M5）
+
+1. 顶部：返回 + 标题「穿着统计」+ 当天日期 + 导出 CSV 按钮。
+2. 概览：覆盖率（穿过 N/M 件）、平均每次成本、需要关注件数。
+3. 闲置提醒：`status === 'idle'` 或 90 天未穿的单品列表。
+4. 成本穿着比：`price / max(wearCount, 1)` 从高到低，默认 8 条，可展开全部；只统计填写价格的单品。
+5. 久未穿：按距上次穿着天数从久到近，从未穿过按入库时间计算，默认 8 条，可展开全部。
+6. 导出 CSV：包含名称、分类、价格、穿着次数、每次成本、最后穿着、状态、穿着情况，带 UTF-8 BOM。
+7. 空衣橱显示引导「添加第一件」。
 
 #### 今日 `/today`（M4）
 
@@ -797,15 +812,21 @@ npx wrangler pages deploy dist --project-name wardrobe
    - 离线或请求失败时显示 `settings.weatherCache` 上次数据，并标注「天气为上次数据」。
 3. 今日记录：当天已记录的套装，显示名称、件数、场合、天气；刚记录的一条高亮。
 4. 场合 chips：不限 / 通勤 / 休闲 / 正式 / 运动 / 约会。
-5. 今天穿什么：候选套装最多 3 套，按收藏 > 评分 > 更新时间排序；每套显示封面/叠穿图、名称、件数与场合，按钮「穿这套」。
+5. 今天穿什么：候选套装先按 M5 规则匹配分从高到低，再按收藏 > 评分 > 更新时间；每套显示封面/叠穿图、名称、件数与场合、匹配分，按钮「穿这套」。
    - 「穿这套」写入 `wearLogs` 并对其所有单品执行 `markWorn`；同一天同一套重复点击只更新场合/天气，不重复累计。
    - 「随便穿一套」从当前候选里随机高亮一套。
    - 无候选时提示当前季节/场合筛选条件，给出「看看其他场合」或「去整理搭配」。
-6. 最近穿过：默认最近 6 条历史记录，可展开全部；显示日期、名称、件数、场合、天气，点「查看」进入搭配详情。
+6. 规则推荐（M5）：从干净、在役、当季的上装 / 下装 / 鞋中稳定采样最多 200 组组合，按规则评分展示前 3 套。
+   - 卡片显示叠穿预览、三件单品名、匹配分和色彩/正式度/保暖分项。
+   - 「存为搭配」创建一套新搭配（名称「推荐 · 日期」，季节与场合取自当前筛选），并尝试生成封面；已保存的组合标记为「已保存为搭配」。
+   - 缺少上装 / 下装 / 鞋或没有合格单品时显示对应提示。
+7. 最近穿过：默认最近 6 条历史记录，可展开全部；显示日期、名称、件数、场合、天气，点「查看」进入搭配详情。
 
 筛选规则：套内单品必须存在、`status === 'active'` 且 `cleanState === 'clean'`；季节取 `outfit.seasons`，为空时取套内单品季节并集，仍为空则视为当季通用；选择了场合时要求 `outfit.occasions` 包含该场合。
 
 无天气或未设置城市时，按当前月份推断季节。
+
+规则推荐过滤：单品必须干净、在役；单品季节为空视为通用，否则需与目标季节相交；选择了场合时，单品风格为空视为通用，否则需包含该场合。目标保暖度取天气建议区间的中值，无天气时取 3；同日同筛选条件结果稳定。
 
 ### 10.5 文案规范
 
@@ -856,8 +877,12 @@ wardrobe/
    │  ├─ collage.ts          # M3 叠穿布局、封面合成、分享长图 / 系统分享
    │  ├─ today.ts            # M4 本地日期、季节映射、候选筛选与排序
    │  ├─ today.spec.ts
-   │  ├─ weather.ts          # M4 Open-Meteo 天气 + 城市搜索 + WMO 文案
+   │  ├─ weather.ts           # M4 Open-Meteo 天气 + 城市搜索 + WMO 文案
    │  ├─ weather.spec.ts
+   │  ├─ recommend.ts        # M5 规则评分、组合采样、套装排序
+   │  ├─ recommend.spec.ts
+   │  ├─ stats.ts            # M5 成本穿着比、久未穿、闲置提醒、覆盖率、CSV
+   │  ├─ stats.spec.ts
    │  ├─ backup.ts           # zip 导出/导入（含 outfits/outfitItems/wearLogs）
    │  ├─ backup.spec.ts
    │  └─ storage.ts          # persist / estimate / formatBytes
@@ -913,7 +938,7 @@ db 不得 import stores/views
 | 21 | 离线 | 已安装且访问过一次后，断网可打开 app shell |
 | 22 | 移动端适配 | 390×844 下无横向滚动；安全区正确；无 300ms 延迟 |
 
-### 12.2 功能清单（M2 + M3 + M4）
+### 12.2 功能清单（M2 + M3 + M4 + M5）
 
 | # | 功能 | 验收标准 |
 | --- | --- | --- |
@@ -934,7 +959,7 @@ db 不得 import stores/views
 | 37 | 分享长图 | 生成 1080×1620 图片（预览 + 名称 + 标签 + 单品清单 + 日期）；系统分享优先，降级下载 |
 | 38 | 搭配备份 | 导出/导入包含 `outfits / outfitItems / covers`；旧备份导入保留本机搭配 |
 | 39 | 今日天气 | 可搜索城市 / 定位 / 手输经纬度；显示温度、天气文案、季节与建议保暖级别；离线显示上次缓存 |
-| 40 | 候选套装 | 按「季节 ∩ 场合 ∩ 全部单品干净且在役」过滤，最多 3 套，收藏/评分优先 |
+| 40 | 候选套装 | 按「季节 ∩ 场合 ∩ 全部单品干净且在役」过滤，最多 3 套，M5 规则匹配分优先 |
 | 41 | 随便穿一套 | 从当前候选中随机高亮一套 |
 | 42 | 记录穿着 | 点「穿这套」写入 `wearLogs`，套内单品 `wearCount+1`、`lastWornAt=今天`、`clean` 变 `worn` |
 | 43 | 同日去重 | 同一天同一套装重复记录只覆盖，不重复累计穿着次数；同一天可记录多套 |
@@ -942,17 +967,29 @@ db 不得 import stores/views
 | 45 | 穿着历史 | 最近 6 条历史可展开全部，显示日期、名称、件数、场合、天气，可进入搭配详情 |
 | 46 | 未设置天气降级 | 未设置城市时按当前月份推断季节；无网络仍可手动选择并记录 |
 | 47 | 穿着记录备份 | 导出/导入包含 `wearLogs.json`；旧备份导入保留本机穿着记录 |
+| 48 | 规则评分 | 色彩 30 + 正式度 20 + 温度 20 + 新鲜度 15 + 历史偏好 15，满分 100 |
+| 49 | 稳定推荐 | 从上装/下装/鞋中采样最多 200 组；同一天同筛选条件结果一致，同分优先久未穿 |
+| 50 | 推荐过滤 | 只使用干净、在役、当季单品；场合按单品风格过滤，风格为空视为通用 |
+| 51 | 推荐落地 | 今日页展示前 3 套推荐；「存为搭配」生成新搭配并尝试生成封面 |
+| 52 | 匹配分展示 | 今日候选套装与规则推荐卡片显示匹配分；候选按匹配分排序 |
+| 53 | 成本穿着比 | `price / max(wearCount, 1)`，从高到低展示，可展开全部 |
+| 54 | 久未穿 | 按距上次穿着天数降序；从未穿过按入库时间计算并标注 |
+| 55 | 闲置提醒 | `status === 'idle'` 或 90 天未穿进入提醒列表 |
+| 56 | 覆盖率与平均成本 | 覆盖率 = 有穿着次数单品 / 总单品；平均成本按价格总和 / 计费次数总和 |
+| 57 | 统计 CSV | 导出名称、分类、价格、次数、每次成本、最后穿着、状态与穿着情况，带 UTF-8 BOM |
 
 ### 12.3 当前验证状态
 
 ```
 npm run typecheck   ✔ 通过
-npm test            ✔ 5 文件 / 31 用例通过
-npm run build       ✔ 通过，PWA precache 44 项
+npm test            ✔ 7 文件 / 55 用例通过（新增 M5 评分、采样、统计、CSV 用例）
+npm run build       ✔ 通过，PWA precache 48 项
 Playwright 冒烟     ✔ 录入→详情→网格→导出备份，0 控制台错误
 Playwright M2 E2E   ✔ 连拍上传→分类保存→后台抠图→衣柜透明底→详情切换
 Playwright M3 E2E   ✔ 7 槽位选衣（配饰多件）→ 保存生成封面 → 详情/分享下载 → 收藏 → 编辑移除 → 列表封面，0 控制台错误
 Playwright M4 E2E   ✔ 手动设置城市 → 天气渲染（模拟 Open-Meteo）→ 候选套装 → 穿这套写入穿着记录、单品转 worn → 备份含 wearLogs.json，0 控制台错误（截图见 docs/screenshots/m4）
+M5 逻辑验证         ✔ 规则评分/稳定采样/过滤/统计口径/CSV 单元测试通过；构建包含 StatsView chunk
+Playwright M5 E2E   ✔ 390×844：设置入口 → 匹配分与 3 套规则推荐（季节/场合/待洗/闲置过滤）→ 存为搭配并校验评分备注 → 统计概览/成本与久未穿排序/展开收起/CSV 下载与转义，0 控制台错误（截图见 docs/screenshots/m5-01…m5-09）
 抠图实测（无头）     ✔ 冷启动 71s（含 88MB 模型下载）；热启动 9.9s（单线程回退）
 ```
 
@@ -964,11 +1001,10 @@ Playwright M4 E2E   ✔ 手动设置城市 → 天气渲染（模拟 Open-Meteo�
 | M2 | 端上抠图（`@imgly/background-removal`）+ 连续拍摄队列 | ✅ 已实现并上线（commit `08639f4`） |
 | M3 | 槽位搭配、叠穿预览、分享长图 | ✅ 已实现（M3） |
 | M4 | 今天 + 天气 + 穿着记录 | ✅ 已实现（M4） |
-| M5 | 规则推荐 + 统计 | ⏳ 设计完成（§14.4），未开发 |
+| M5 | 规则推荐 + 统计 | ✅ 已实现（M5） |
 
-**下一步建议**：M5 规则评分与统计页（成本穿着比、久未穿、闲置提醒）。
-M4 小改进：§15.2 第 9/10 条（清除天气位置、跨午夜日期刷新）。
-顺手可修：§6.3 / §15.2 第 1 条的搜索中文标签缺陷。
+**下一步建议**：M4 小改进：§15.2 第 9/10 条（清除天气位置、跨午夜日期刷新）。
+顺手可修：§6.3 / §15.2 第 1 条的搜索中文标签缺陷，以及 §15.2 的批量整理与重复检测。
 
 ---
 
@@ -1214,7 +1250,9 @@ await db.open()
 
 ---
 
-### 14.4 M5 — 规则推荐 + 统计（已设计，未开发）
+### 14.4 M5 — 规则推荐 + 统计（已实现）
+
+> 状态：已实现。推荐与统计均为纯函数服务，今日页与独立统计页消费。
 
 **目标**：不依赖机器学习，用可解释规则给出「能穿出门」的组合。
 
@@ -1222,35 +1260,51 @@ await db.open()
 
 ```
 for slot in [上装, 下装, 鞋]:
-    候选 = items.filter(干净 && 季节匹配 && 在役)
+    候选 = items.filter(干净 && 在役 && (单品季节为空 || 与目标季节相交))
+    场合：单品风格为空视为通用，否则需包含当前场合
 组合采样：随机取 200 组（不足则全取）
 ```
+
+- 使用 `today + 场合 + 目标季节` 做随机种子，同一天同筛选条件结果稳定。
+- 任一套路缺少候选（如上装 / 下装 / 鞋）时不生成推荐，并在今日页给出提示。
 
 **评分函数（满分 100）**
 
 | 维度 | 权重 | 规则 |
 | --- | --- | --- |
-| 色彩和谐 | 30 | 中性色互相 +30；1 个彩色 + 中性色 +25；2 个彩色 +10；≥3 个彩色 +0 |
-| 正式度一致 | 20 | `20 - 10 × (max - min)`，最低 0 |
-| 温度匹配 | 20 | 平均保暖度与目标值差 0 → 20，每差 1 减 6 |
-| 新鲜度 | 15 | 距上次穿着天数 / 30 × 15，上限 15 |
-| 历史偏好 | 15 | (单品评分均值 - 3) / 2 × 15 + 7.5 |
+| 色彩和谐 | 30 | 中性色互相 +30；1 个彩色 + 中性色 +25；2 个彩色 +10；≥3 个彩色 +0；未填颜色按中性处理 |
+| 正式度一致 | 20 | `20 - 10 × (max - min)`，最低 0；不足 2 个有效值按满分 |
+| 温度匹配 | 20 | 平均保暖度与目标值差 0 → 20，每差 1 减 6；未填保暖度按满分 |
+| 新鲜度 | 15 | `min(30, 组合内最久未穿天数) / 30 × 15`；从未穿过按 30 天 |
+| 历史偏好 | 15 | 穿着记录评分均值；无评分时用套装评分或 3；`(均值 - 3) / 2 × 15 + 7.5`，限制 0–15 |
 
-- 同分时按「久未穿」优先。
-- 使用日期做随机种子，保证同一天结果稳定。
+- 目标保暖度：有天气时取 `warmthRange` 区间中值，无天气时取 3。
+- 同分时按组合内最久未穿天数优先，再按单品 id 稳定排序。
+- 今日页的已保存候选套装也按同一评分排序，卡片显示匹配分；同分先按组合内最久未穿天数，再按收藏 > 套装评分 > 更新时间。
+- 「规则推荐」卡片可一键「存为搭配」，名称「推荐 · 日期」，季节/场合沿用当前筛选，封面生成失败不阻断。
 
-**统计页（并入设置或单独 Tab）**
+**统计页（独立路由 `/stats`，设置页入口）**
 
-- 成本穿着比：`price / max(wearCount, 1)`，按从高到低排序（最不划算的在前）。
-- 久未穿：`today - lastWornAt` 降序。
+- 成本穿着比：`price / max(wearCount, 1)`，按从高到低排序（最不划算的在前），默认 8 条可展开。
+- 久未穿：按距上次穿着天数降序；从未穿过按入库时间计算并标注「还没穿过」。
 - 闲置提醒：`status === 'idle'` 或 90 天未穿。
-- 分类覆盖率：有穿着记录的单品数 / 总数。
+- 分类覆盖率：有穿着记录（`wearCount > 0`）的单品数 / 总数。
+- 平均每次成本：有价格单品的价格总和 / `Σ max(wearCount, 1)`。
+- CSV：UTF-8 BOM，包含名称、分类、价格、次数、每次成本、最后穿着、状态、穿着情况。
+
+**实现文件**
+
+- `services/recommend.ts` / `recommend.spec.ts`：评分、采样、套装评分、排序。
+- `services/stats.ts` / `stats.spec.ts`：日期差、成本、久未穿、闲置、覆盖率、CSV。
+- `components/RecommendCard.vue`、`views/TodayView.vue`：规则推荐与匹配分。
+- `views/StatsView.vue`、`components/Icon.vue`（`chart`）：统计页。
+- `router/index.ts`、`views/SettingsView.vue`：`/stats` 路由与入口。
 
 **验收**
 
 - 推荐结果不包含待洗/洗涤中单品。
 - 同一天多次进入「今天」结果一致。
-- 统计与原始数据一致，可导出 CSV（可选）。
+- 统计与原始数据一致，可导出 CSV。
 
 ---
 
@@ -1381,8 +1435,10 @@ npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
    - 封面 1080×1440；分享图 1080×1620；优先 `navigator.share({files})`，不可用则下载。
 6. `services/today.ts` 实现 `localDateKey / todayHeading / seasonForDate / seasonsForTemperature / warmthRange / effectiveSeasons / isOutfitEligible / rankOutfits`（纯函数，便于单测）。
 7. `services/weather.ts` 实现 `describeWeather / fetchWeather / searchPlaces / currentPosition`；请求带 8s 超时，结果写 `settings.weatherCache`。
+8. `services/recommend.ts` 实现 `scoreItems / scoreOutfit / buildWearHistory / recommendCombinations / compareScored`；评分维度与权重按 §14.4。
+9. `services/stats.ts` 实现 `daysBetweenKeys / daysSinceWorn / costPerWear / costPerWearRows / longUnwornRows / idleReminderRows / wearCoverage / averageCostPerWear / statsSummary / buildStatsCsv`。
 
-验收：`npm test` 全绿（含备份往返）；无头 Chromium 能对一张图跑通 `createCutout`。
+验收：`npm test` 全绿（含备份往返、M5 评分与统计）；无头 Chromium 能对一张图跑通 `createCutout`。
 
 ### 步骤 6：状态层
 
@@ -1421,7 +1477,7 @@ npm i -D vite-plugin-pwa vitest fake-indexeddb jsdom @vue/test-utils sharp
 
 1. `router/index.ts` 按 §4.2，含 `scrollBehavior`。
 2. `App.vue`：`router-view` + 条件 `AppTabBar`（`route.meta.tab`）+ `CutoutIndicator` + `ToastHost`。
-3. 依次实现 `WardrobeView`、`ItemEditView`、`ItemDetailView`、`CaptureView`、`OutfitsView`、`OutfitEditView`、`OutfitDetailView`、`TodayView`、`SettingsView`，细节按 §10.4。
+3. 依次实现 `WardrobeView`、`ItemEditView`、`ItemDetailView`、`CaptureView`、`OutfitsView`、`OutfitEditView`、`OutfitDetailView`、`TodayView`、`SettingsView`、`StatsView`，细节按 §10.4。
 4. `ItemEditView`：选图后先出预览再后台抠图；保存前若抠图未完成要 `await`，失败则按「无抠图」保存。
 5. `CaptureView`：`reactive` 创建队列项（否则直接改目标对象不触发渲染），保存后 `cutout.enqueue(ids, true)` 再 `router.replace('/')`。
 6. `OutfitEditView`：保存后 `renderOutfitCover`，封面失败只 Toast 不阻断；`OutfitDetailView` 分享失败回退下载。
@@ -1457,6 +1513,8 @@ npm run build
 7. 刷新页面 → 数据仍在
 8. M2：相机 → 连续录入 → 连拍 3 件 → 批量分类 → 加入衣橱 → 后台抠图完成 → 卡片透明底 → 详情「原图/抠图」切换
 9. M2：设置 → 重新抠图全部 → 进度跑完 → 计数更新
+10. M5：今日页看到候选匹配分与规则推荐 → 「存为搭配」→ 搭配列表出现新套装
+11. M5：设置 → 穿着统计 → 成本穿着比 / 久未穿 / 闲置提醒正确 → 导出 CSV
 
 全部通过即为功能等价。
 
@@ -1564,7 +1622,7 @@ npm run build
 
 | 维度 | 一致度 | 保障来源 |
 | --- | --- | --- |
-| 功能与页面流程 | 100% | §4 路由表、§12 验收标准（38 条） |
+| 功能与页面流程 | 100% | §4 路由表、§12 验收标准（57 条） |
 | 数据模型与备份互通 | 100% | §5 字段表 + 不变量、§8 zip 结构 |
 | 业务规则与算法 | 100% | §6 规则、§7 参数与伪代码 |
 | 文案 | 100% | 附录 A |
@@ -1715,8 +1773,9 @@ npm run build
 | 位置 | 文案 |
 | --- | --- |
 | 标题 | 设置 |
-| 区块 | 衣橱概览 / 备份与迁移 / 本地存储 / 安装到手机主屏幕 |
+| 区块 | 衣橱概览 / 穿着统计 / 备份与迁移 / 本地存储 / 照片与抠图 / 安装到手机主屏幕 |
 | 统计卡 | 件单品 / 累计穿着次数 / 衣橱总价值 |
+| 统计入口 | 查看每件单品的成本穿着比、久未穿与闲置提醒，也可以导出 CSV 慢慢分析。 / 打开穿着统计 |
 | 备份提示（无） | 还没有备份过，建议先导出一次 |
 | 备份提示（今天） | 今天已备份 |
 | 备份提示（<7 天） | {n} 天前备份 |
@@ -1742,13 +1801,17 @@ npm run build
 | 天气卡（有位置） | {天气文案} / {温度}° / {城市} {时间} 更新 / 建议保暖 {min}–{max} 级 · {保暖建议} |
 | 天气卡（离线） | 天气为上次数据，联网后自动更新 |
 | Toast | 天气更新失败，显示上次数据 / 天气获取失败，请稍后重试 |
-| 区块 | 今日记录 / 今天什么场合 / 今天穿什么 / 最近穿过 |
+| 区块 | 今日记录 / 今天什么场合 / 今天穿什么 / 规则推荐 / 最近穿过 |
 | 场合 | 不限 / 通勤 / 休闲 / 正式 / 运动 / 约会（右上「清除」） |
 | 候选提示 | {n} 套可选 |
+| 候选分数 | 匹配 {score} |
 | 空态（无搭配） | 还没有搭配 / 先把常穿的单品拼成套装，今天页就能直接挑。 / 新建搭配 |
 | 空态（无候选） | 没有符合条件的套装 / 当前按「{季节}{ · 场合}」筛选，需要套装内单品都干净、在役，季节也要匹配。 / 看看其他场合 / 去整理搭配 |
 | 操作 | 随便穿一套 / 穿这套 |
 | Toast | 试试「{名称}」/ 这套搭配还没有单品 / 已记录今天穿了「{名称}」/ 今天已经记录过这套 / 记录失败，请重试 |
+| 规则推荐 | 规则推荐 / 色彩 · 正式度 · 温度 · 新鲜度 / {score} 分 / 存为搭配 / 保存中 / 已保存为搭配 |
+| 推荐提示 | 衣橱里还需要{槽位}，才能自动组合推荐。 / 没有同时满足「干净 · 在役 · 当季」的上装、下装和鞋，先整理一下衣橱吧。 |
+| 推荐 Toast | 已保存为搭配 / 保存失败，请重试 |
 | 历史行 | {日期} · {件数} 件{ · 场合}{ · 天气} / 查看 |
 | 历史兜底 | 已删除搭配 / {n} 件单品 |
 | 展开 | 查看全部 / 收起 |
@@ -1771,6 +1834,23 @@ npm run build
 ```
 这是「衣橱」的备份文件。请勿解压修改。在新设备上用「导入备份」即可恢复。
 ```
+
+### A11 穿着统计（`StatsView`）
+
+| 位置 | 文案 |
+| --- | --- |
+| 标题 | 穿着统计 |
+| 概览 | 穿过 {n}/{m} 件 / 平均每次成本 / {n} 件需要关注 |
+| 说明 | 成本按「价格 ÷ 穿着次数」计算，从未穿过按 1 次计。覆盖率统计至少有 1 次穿着记录的单品。 |
+| 区块 | 闲置提醒 / 成本穿着比 / 久未穿 |
+| 成本提示 | 越靠前越不划算 / 还没有填写价格的单品，补上价格后就能看到成本。 |
+| 成本行 | {分类} · ¥{价格} · 穿过 {n} 次 / ¥{cost}/次 |
+| 久未穿 | 入库 {n} 天，还没穿过 / {n} 天没穿 / 今天穿过 / 闲置 / 90+ 天 |
+| 展开 | 查看全部 {n} 件 / 收起 |
+| 操作 | 导出统计 CSV |
+| Toast | 已导出统计 CSV |
+| 空态 | 衣橱里还没有单品 / 添加第一件 |
+| CSV 列 | 名称、分类、价格、穿着次数、每次成本、最后穿着、状态、穿着情况 |
 
 ---
 
@@ -1800,6 +1880,7 @@ npm run build
 | `hanger` | `M12 6.5a2 2 0 100-4 2 2 0 000 4z`、`M12 6.5v3l8 5.5H4z` |
 | `pin` | `M12 21s6-5.2 6-11a6 6 0 10-12 0c0 5.8 6 11 6 11z`、`M12 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z` |
 | `refresh` | `M4.5 12a7.5 7.5 0 0112.6-5.5`、`M20 4.5v6h-6`、`M19.5 12a7.5 7.5 0 01-12.6 5.5`、`M4 19.5v-6h6` |
+| `chart` | `M4 20V4`、`M4 20h16`、`M8 17v-5`、`M12 17V8`、`M16 17v-3` |
 
 旋转类：`.spin { animation: spin .9s linear infinite } @keyframes spin { to { transform: rotate(360deg) } }`。
 
